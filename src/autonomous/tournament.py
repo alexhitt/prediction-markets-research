@@ -25,7 +25,7 @@ from datetime import datetime, date, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from threading import Lock
+from threading import RLock
 
 from loguru import logger
 
@@ -193,6 +193,9 @@ class BotProfile:
             "sharpe_ratio": self.sharpe_ratio,
             "max_drawdown": self.max_drawdown,
             "open_bets_count": len(self.open_bets),
+            "open_bets": [b.to_dict() for b in self.open_bets],  # Persist open bets
+            "bet_history": [b.to_dict() for b in self.bet_history[-50:]],  # Last 50 bets
+            "daily_pnls": self.daily_pnls,
             "can_advance": self.can_advance,
             "should_eliminate": self.should_eliminate,
             "generation": self.generation,
@@ -224,7 +227,7 @@ class BotTournament:
         self.today_bets: List[SimulatedBet] = []
         self.all_bets: List[SimulatedBet] = []
 
-        self._lock = Lock()
+        self._lock = RLock()  # Reentrant lock to allow nested calls
         self._load_state()
 
     def _load_state(self):
@@ -238,7 +241,12 @@ class BotTournament:
                     for bot_data in data.get("bots", []):
                         bot = self._dict_to_bot(bot_data)
                         self.bots[bot.id] = bot
-                    logger.info(f"Loaded {len(self.bots)} bots from tournament state")
+                    # Restore today_bets and all_bets
+                    for bet_data in data.get("today_bets", []):
+                        self.today_bets.append(self._dict_to_bet(bet_data))
+                    for bet_data in data.get("all_bets", []):
+                        self.all_bets.append(self._dict_to_bet(bet_data))
+                    logger.info(f"Loaded {len(self.bots)} bots, {len(self.today_bets)} today bets from tournament state")
             except Exception as e:
                 logger.error(f"Error loading tournament state: {e}")
 
@@ -248,6 +256,8 @@ class BotTournament:
         try:
             data = {
                 "bots": [bot.to_dict() for bot in self.bots.values()],
+                "today_bets": [b.to_dict() for b in self.today_bets[-100:]],  # Last 100 today's bets
+                "all_bets": [b.to_dict() for b in self.all_bets[-500:]],  # Last 500 total bets
                 "saved_at": datetime.utcnow().isoformat(),
             }
             with open(state_file, "w") as f:
@@ -255,9 +265,27 @@ class BotTournament:
         except Exception as e:
             logger.error(f"Error saving tournament state: {e}")
 
+    def _dict_to_bet(self, data: Dict) -> SimulatedBet:
+        """Reconstruct SimulatedBet from dict."""
+        return SimulatedBet(
+            id=data["id"],
+            bot_id=data["bot_id"],
+            market_id=data["market_id"],
+            market_question=data["market_question"],
+            side=data["side"],
+            amount=data["amount"],
+            entry_price=data["entry_price"],
+            placed_at=datetime.fromisoformat(data["placed_at"]) if data.get("placed_at") else datetime.utcnow(),
+            matures_at=datetime.fromisoformat(data["matures_at"]) if data.get("matures_at") else None,
+            resolved_at=datetime.fromisoformat(data["resolved_at"]) if data.get("resolved_at") else None,
+            exit_price=data.get("exit_price"),
+            pnl=data.get("pnl", 0),
+            status=data.get("status", "pending"),
+        )
+
     def _dict_to_bot(self, data: Dict) -> BotProfile:
         """Reconstruct BotProfile from dict."""
-        return BotProfile(
+        bot = BotProfile(
             id=data["id"],
             name=data["name"],
             strategy_type=data["strategy_type"],
@@ -273,6 +301,13 @@ class BotTournament:
             generation=data.get("generation", 1),
             weights=data.get("weights", {}),
         )
+        # Restore open bets and bet history
+        for bet_data in data.get("open_bets", []):
+            bot.open_bets.append(self._dict_to_bet(bet_data))
+        for bet_data in data.get("bet_history", []):
+            bot.bet_history.append(self._dict_to_bet(bet_data))
+        bot.daily_pnls = data.get("daily_pnls", {})
+        return bot
 
     def add_bot(self, name: str, strategy_type: str, weights: Dict[str, float]) -> BotProfile:
         """Add a new bot to the tournament."""
