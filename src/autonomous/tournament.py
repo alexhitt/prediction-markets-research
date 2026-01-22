@@ -306,7 +306,7 @@ class BotTournament:
             bot.open_bets.append(self._dict_to_bet(bet_data))
         for bet_data in data.get("bet_history", []):
             bot.bet_history.append(self._dict_to_bet(bet_data))
-        bot.daily_pnls = data.get("daily_pnls", {})
+        bot.daily_pnls = data.get("daily_pnls", [])
         return bot
 
     def add_bot(self, name: str, strategy_type: str, weights: Dict[str, float]) -> BotProfile:
