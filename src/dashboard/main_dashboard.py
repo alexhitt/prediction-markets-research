@@ -1,11 +1,12 @@
 """
-Prediction Markets Command Center
-Sharp, data-dense trading interface with real-time monitoring.
+Prediction Markets Trading Dashboard
+Professional tabbed interface for bot management and performance tracking.
+Inspired by 3Commas, Bitsgap, TraderSync, and TradingView.
 """
 
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from pathlib import Path
 import sys
 from collections import defaultdict
@@ -26,362 +27,206 @@ from src.signals.fast_news import FastNewsSignalDetector
 # PAGE CONFIG
 # ============================================================================
 st.set_page_config(
-    page_title="Command Center",
-    page_icon="◉",
+    page_title="Trading Dashboard",
+    page_icon="📊",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
 # ============================================================================
-# COMMAND CENTER CSS - Sharp, dense, professional
+# PROFESSIONAL CSS
 # ============================================================================
 st.markdown("""
 <style>
-    /* Reset and base */
+    /* Base theme */
     #MainMenu, footer, header {visibility: hidden;}
-    .block-container {padding: 0.5rem 0.8rem !important; max-width: 100% !important;}
+    .block-container {padding: 1rem 1.5rem !important; max-width: 100% !important;}
 
-    /* Dark command center theme */
     .stApp {
-        background: #0a0a0f;
-        color: #e0e0e0;
+        background: #0f1117;
     }
 
-    /* Monospace for data */
-    * {
-        font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+    /* Sidebar styling */
+    [data-testid="stSidebar"] {
+        background: #161b22;
+        border-right: 1px solid #21262d;
+    }
+    [data-testid="stSidebar"] .stMarkdown {
+        color: #c9d1d9;
     }
 
-    /* Top bar */
-    .top-bar {
-        background: linear-gradient(180deg, #12121a 0%, #0d0d12 100%);
-        border: 1px solid #1e1e2e;
-        border-radius: 2px;
-        padding: 12px 20px;
-        margin-bottom: 12px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
+    /* Tab styling */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        background: #161b22;
+        padding: 8px 16px;
+        border-radius: 8px;
+        border: 1px solid #21262d;
     }
-    .system-title {
-        font-size: 14px;
-        font-weight: 600;
-        color: #00ff88;
-        letter-spacing: 2px;
-        text-transform: uppercase;
+    .stTabs [data-baseweb="tab"] {
+        background: transparent;
+        color: #8b949e;
+        border-radius: 6px;
+        padding: 8px 16px;
+        font-weight: 500;
     }
-    .system-status {
-        display: flex;
-        gap: 30px;
-        align-items: center;
+    .stTabs [data-baseweb="tab"]:hover {
+        background: #21262d;
+        color: #c9d1d9;
     }
-    .stat-block {
-        text-align: right;
+    .stTabs [aria-selected="true"] {
+        background: #238636 !important;
+        color: white !important;
     }
-    .stat-value {
-        font-size: 18px;
+
+    /* Metric cards */
+    .metric-card {
+        background: #161b22;
+        border: 1px solid #21262d;
+        border-radius: 8px;
+        padding: 16px;
+    }
+    .metric-value {
+        font-size: 28px;
         font-weight: 700;
-        color: #fff;
-        font-variant-numeric: tabular-nums;
+        color: #f0f6fc;
+        margin-bottom: 4px;
     }
-    .stat-value.positive { color: #00ff88; }
-    .stat-value.negative { color: #ff4757; }
-    .stat-label {
-        font-size: 9px;
-        color: #666;
+    .metric-label {
+        font-size: 12px;
+        color: #8b949e;
         text-transform: uppercase;
-        letter-spacing: 1px;
+        letter-spacing: 0.5px;
     }
-    .live-badge {
-        background: #ff4757;
-        color: #fff;
-        padding: 3px 8px;
-        border-radius: 2px;
-        font-size: 9px;
-        font-weight: 700;
-        animation: blink 1.5s infinite;
+    .metric-delta {
+        font-size: 13px;
+        margin-top: 4px;
     }
-    @keyframes blink {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.5; }
-    }
+    .positive { color: #3fb950 !important; }
+    .negative { color: #f85149 !important; }
+    .neutral { color: #8b949e !important; }
 
-    /* Panel styling */
-    .panel {
-        background: #0d0d12;
-        border: 1px solid #1a1a24;
-        border-radius: 2px;
-        margin-bottom: 8px;
-    }
-    .panel-header {
-        background: #12121a;
-        padding: 8px 12px;
-        border-bottom: 1px solid #1a1a24;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-    }
-    .panel-title {
-        font-size: 10px;
-        font-weight: 600;
-        color: #888;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-    }
-    .panel-badge {
-        font-size: 9px;
-        color: #00ff88;
-        background: rgba(0,255,136,0.1);
-        padding: 2px 6px;
-        border-radius: 2px;
-    }
-    .panel-content {
-        padding: 8px;
-    }
-
-    /* Data table */
+    /* Data tables */
     .data-table {
         width: 100%;
         border-collapse: collapse;
-        font-size: 11px;
+        font-size: 13px;
     }
     .data-table th {
         text-align: left;
-        padding: 6px 8px;
-        color: #555;
+        padding: 12px;
+        background: #161b22;
+        color: #8b949e;
         font-weight: 500;
+        border-bottom: 1px solid #21262d;
+        font-size: 11px;
         text-transform: uppercase;
-        font-size: 9px;
         letter-spacing: 0.5px;
-        border-bottom: 1px solid #1a1a24;
     }
     .data-table td {
-        padding: 6px 8px;
-        border-bottom: 1px solid #111118;
-        color: #ccc;
-        font-variant-numeric: tabular-nums;
+        padding: 12px;
+        border-bottom: 1px solid #21262d;
+        color: #c9d1d9;
     }
     .data-table tr:hover {
-        background: #111118;
+        background: #161b22;
     }
-    .rank-1 { color: #ffd700 !important; font-weight: 700; }
+
+    /* Status badges */
+    .badge {
+        display: inline-block;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 600;
+    }
+    .badge-success { background: rgba(63, 185, 80, 0.2); color: #3fb950; }
+    .badge-danger { background: rgba(248, 81, 73, 0.2); color: #f85149; }
+    .badge-warning { background: rgba(210, 153, 34, 0.2); color: #d29922; }
+    .badge-info { background: rgba(56, 139, 253, 0.2); color: #388bfd; }
+
+    /* Rank indicators */
+    .rank-1 { color: #ffd700 !important; }
     .rank-2 { color: #c0c0c0 !important; }
     .rank-3 { color: #cd7f32 !important; }
-    .positive { color: #00ff88 !important; }
-    .negative { color: #ff4757 !important; }
-    .neutral { color: #888 !important; }
-    .hot { color: #ff9f43 !important; }
 
-    /* Mini bar chart in table */
-    .mini-bar {
-        display: inline-block;
-        height: 4px;
-        background: #1a1a24;
-        border-radius: 1px;
-        width: 60px;
-        position: relative;
+    /* Section headers */
+    .section-header {
+        font-size: 16px;
+        font-weight: 600;
+        color: #f0f6fc;
+        margin-bottom: 16px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid #21262d;
     }
-    .mini-bar-fill {
-        position: absolute;
-        left: 0;
-        top: 0;
-        height: 100%;
-        border-radius: 1px;
-    }
-    .mini-bar-fill.win { background: #00ff88; }
-    .mini-bar-fill.loss { background: #ff4757; }
 
-    /* Market row */
-    .market-row {
-        padding: 6px 8px;
-        border-bottom: 1px solid #111118;
+    /* Panel */
+    .panel {
+        background: #0d1117;
+        border: 1px solid #21262d;
+        border-radius: 8px;
+        padding: 16px;
+        margin-bottom: 16px;
+    }
+    .panel-header {
         display: flex;
         justify-content: space-between;
         align-items: center;
+        margin-bottom: 12px;
+    }
+    .panel-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: #f0f6fc;
+    }
+    .panel-badge {
         font-size: 11px;
+        color: #8b949e;
+        background: #21262d;
+        padding: 2px 8px;
+        border-radius: 10px;
     }
-    .market-row:hover {
-        background: #111118;
-    }
-    .market-q {
-        color: #ccc;
-        flex: 1;
-        white-space: nowrap;
+
+    /* Progress bar */
+    .progress-bar {
+        height: 6px;
+        background: #21262d;
+        border-radius: 3px;
         overflow: hidden;
-        text-overflow: ellipsis;
-        margin-right: 12px;
     }
-    .market-prices {
-        display: flex;
-        gap: 6px;
-        align-items: center;
-    }
-    .price-tag {
-        padding: 2px 6px;
-        border-radius: 2px;
-        font-size: 10px;
-        font-weight: 600;
-        font-variant-numeric: tabular-nums;
-    }
-    .price-yes {
-        background: rgba(0,255,136,0.15);
-        color: #00ff88;
-        border: 1px solid rgba(0,255,136,0.3);
-    }
-    .price-no {
-        background: rgba(255,71,87,0.15);
-        color: #ff4757;
-        border: 1px solid rgba(255,71,87,0.3);
-    }
-    .market-vol {
-        color: #555;
-        font-size: 9px;
-        width: 60px;
-        text-align: right;
+    .progress-fill {
+        height: 100%;
+        border-radius: 3px;
     }
 
-    /* News item */
-    .news-row {
-        padding: 5px 8px;
-        border-bottom: 1px solid #111118;
-        font-size: 10px;
-    }
-    .news-row:hover {
-        background: #111118;
-    }
-    .news-title {
-        color: #bbb;
-        line-height: 1.3;
-        margin-bottom: 2px;
-    }
-    .news-meta {
-        color: #444;
-        font-size: 9px;
-        display: flex;
-        gap: 8px;
-    }
-    .news-source {
-        color: #666;
-        text-transform: uppercase;
-    }
-    .news-time {
-        color: #555;
-    }
-    .news-breaking {
-        color: #ff4757;
-        font-weight: 600;
-    }
-    .news-sentiment-up { color: #00ff88; }
-    .news-sentiment-down { color: #ff4757; }
-
-    /* Compact buttons */
+    /* Button overrides */
     .stButton > button {
-        background: #1a1a24 !important;
-        color: #888 !important;
-        border: 1px solid #2a2a3a !important;
-        border-radius: 2px !important;
-        padding: 8px 16px !important;
-        font-size: 10px !important;
+        background: #21262d !important;
+        color: #c9d1d9 !important;
+        border: 1px solid #30363d !important;
+        border-radius: 6px !important;
         font-weight: 500 !important;
-        text-transform: uppercase !important;
-        letter-spacing: 1px !important;
-        transition: all 0.2s !important;
     }
     .stButton > button:hover {
-        background: #2a2a3a !important;
-        color: #fff !important;
-        border-color: #3a3a4a !important;
+        background: #30363d !important;
+        border-color: #8b949e !important;
     }
 
-    /* Checkbox */
-    .stCheckbox label {
-        font-size: 10px !important;
-        color: #666 !important;
+    /* Selectbox */
+    .stSelectbox > div > div {
+        background: #21262d;
+        border-color: #30363d;
     }
 
-    /* Metrics mini cards */
-    .metric-mini {
-        background: #0d0d12;
-        border: 1px solid #1a1a24;
-        border-radius: 2px;
-        padding: 10px 12px;
-        text-align: center;
-    }
-    .metric-mini-value {
-        font-size: 20px;
-        font-weight: 700;
-        color: #fff;
-        font-variant-numeric: tabular-nums;
-    }
-    .metric-mini-label {
-        font-size: 8px;
-        color: #555;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        margin-top: 4px;
-    }
-
-    /* Strategy compact */
-    .strat-row {
-        padding: 6px 8px;
-        border-bottom: 1px solid #111118;
-        font-size: 10px;
-    }
-    .strat-name {
-        color: #ccc;
-        font-weight: 500;
-        margin-bottom: 2px;
-    }
-    .strat-desc {
-        color: #555;
-        font-size: 9px;
-    }
-    .strat-tags {
-        margin-top: 3px;
-    }
-    .strat-tag {
-        display: inline-block;
-        background: rgba(0,255,136,0.1);
-        color: #00ff88;
-        padding: 1px 4px;
-        border-radius: 2px;
-        font-size: 8px;
-        margin-right: 4px;
-    }
-
-    /* Activity indicator */
-    .activity-dot {
-        display: inline-block;
-        width: 6px;
-        height: 6px;
-        border-radius: 50%;
-        margin-right: 6px;
-    }
-    .activity-active { background: #00ff88; }
-    .activity-idle { background: #555; }
-    .activity-warning { background: #ff9f43; }
-
-    /* Scrollable panel */
-    .scroll-panel {
-        max-height: 280px;
-        overflow-y: auto;
-    }
-    .scroll-panel::-webkit-scrollbar {
-        width: 4px;
-    }
-    .scroll-panel::-webkit-scrollbar-track {
-        background: #0d0d12;
-    }
-    .scroll-panel::-webkit-scrollbar-thumb {
-        background: #2a2a3a;
-        border-radius: 2px;
-    }
+    /* Small text */
+    .text-muted { color: #8b949e; font-size: 12px; }
+    .text-sm { font-size: 12px; }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ============================================================================
-# DATA FUNCTIONS
+# DATA LAYER
 # ============================================================================
 
 @st.cache_resource
@@ -399,7 +244,7 @@ def fetch_live_markets():
     try:
         resp = requests.get(
             "https://gamma-api.polymarket.com/markets",
-            params={"closed": "false", "limit": 25},
+            params={"closed": "false", "limit": 30},
             timeout=10
         )
         if resp.status_code == 200:
@@ -416,10 +261,12 @@ def fetch_live_markets():
                     yes_price = float(prices_raw[0]) if prices_raw else 0.5
 
                 markets.append({
+                    "id": m.get("id", ""),
                     "question": m.get("question", "Unknown"),
                     "yes_price": yes_price,
                     "volume": float(m.get("volume", 0) or 0),
                     "volume_24h": float(m.get("volume24hr", 0) or 0),
+                    "category": m.get("category", ""),
                 })
             return sorted(markets, key=lambda x: x['volume_24h'], reverse=True)
     except:
@@ -433,572 +280,828 @@ def fetch_news():
     try:
         detector = FastNewsSignalDetector()
         data = detector.fetch_data()
-        return data.get("items", [])[:20]
+        return data.get("items", [])[:25]
     except:
         return []
 
 
 # ============================================================================
-# UI COMPONENTS
+# SIDEBAR
 # ============================================================================
 
-def render_top_bar():
-    """Render command center top bar."""
+def render_sidebar():
+    """Render sidebar with system status and quick actions."""
     tournament = get_tournament()
 
+    with st.sidebar:
+        st.markdown("### 📊 Trading Dashboard")
+        st.markdown("---")
+
+        # System status
+        total_capital = sum(b.current_capital for b in tournament.bots.values())
+        initial = len(tournament.bots) * 1000
+        total_pnl = total_capital - initial
+        pnl_pct = (total_pnl / initial * 100) if initial > 0 else 0
+
+        st.markdown("**System Status**")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Capital", f"${total_capital:,.0f}")
+        with col2:
+            st.metric("P&L", f"${total_pnl:+,.0f}", f"{pnl_pct:+.1f}%")
+
+        st.markdown("---")
+
+        # Quick actions
+        st.markdown("**Quick Actions**")
+
+        if st.button("▶️ Simulate Round", use_container_width=True):
+            tournament.simulate_round()
+            st.cache_data.clear()
+            st.rerun()
+
+        if st.button("📊 Daily Evaluation", use_container_width=True):
+            tournament.run_daily_evaluation()
+            st.cache_data.clear()
+            st.rerun()
+
+        if st.button("🔄 Refresh Data", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+
+        st.markdown("---")
+
+        # Auto refresh
+        auto_refresh = st.checkbox("Auto-refresh (10s)")
+        if auto_refresh:
+            time.sleep(10)
+            st.rerun()
+
+        st.markdown("---")
+
+        # Bot status summary
+        st.markdown("**Bot Status**")
+        active = len([b for b in tournament.bots.values() if b.status != BotStatus.ELIMINATED])
+        total_bets = sum(b.total_bets for b in tournament.bots.values())
+        open_pos = sum(len(b.open_bets) for b in tournament.bots.values())
+
+        st.markdown(f"""
+        - Active Bots: **{active}/{len(tournament.bots)}**
+        - Total Bets: **{total_bets}**
+        - Open Positions: **{open_pos}**
+        """)
+
+
+# ============================================================================
+# TAB 1: OVERVIEW
+# ============================================================================
+
+def render_overview_tab():
+    """Overview tab with key metrics and performance summary."""
+    tournament = get_tournament()
+
+    # Top metrics row
     total_capital = sum(b.current_capital for b in tournament.bots.values())
     initial = len(tournament.bots) * 1000
     total_pnl = total_capital - initial
     total_bets = sum(b.total_bets for b in tournament.bots.values())
     wins = sum(b.winning_bets for b in tournament.bots.values())
+    losses = total_bets - wins
     win_rate = (wins / total_bets * 100) if total_bets > 0 else 0
-    active_bots = len([b for b in tournament.bots.values() if b.status != BotStatus.ELIMINATED])
     open_positions = sum(len(b.open_bets) for b in tournament.bots.values())
 
-    pnl_class = "positive" if total_pnl >= 0 else "negative"
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
 
-    st.html(f"""
-    <div class="top-bar">
-        <div>
-            <div class="system-title">◉ PREDICTION COMMAND CENTER</div>
-        </div>
-        <div class="system-status">
-            <div class="stat-block">
-                <div class="stat-value">${total_capital:,.0f}</div>
-                <div class="stat-label">Capital</div>
+    with col1:
+        st.metric("Total Capital", f"${total_capital:,.0f}")
+    with col2:
+        delta_color = "normal" if total_pnl >= 0 else "inverse"
+        st.metric("Total P&L", f"${total_pnl:+,.0f}", f"{total_pnl/initial*100:+.1f}%", delta_color=delta_color)
+    with col3:
+        st.metric("Win Rate", f"{win_rate:.1f}%", f"{wins}W / {losses}L")
+    with col4:
+        st.metric("Total Bets", f"{total_bets}")
+    with col5:
+        st.metric("Open Positions", f"{open_positions}")
+    with col6:
+        active = len([b for b in tournament.bots.values() if b.status != BotStatus.ELIMINATED])
+        st.metric("Active Bots", f"{active}/{len(tournament.bots)}")
+
+    st.markdown("---")
+
+    # Two column layout
+    col_left, col_right = st.columns([2, 1])
+
+    with col_left:
+        # P&L Chart
+        st.markdown("#### 📈 Performance by Bot")
+        rankings = tournament.get_rankings()
+
+        if rankings:
+            df = pd.DataFrame([{
+                'Bot': r['name'],
+                'P&L': r['total_pnl'],
+                'Win Rate': r.get('win_rate', 0) * 100,
+                'Bets': r.get('total_bets', 0)
+            } for r in rankings])
+
+            fig = go.Figure()
+            colors = ['#3fb950' if x >= 0 else '#f85149' for x in df['P&L']]
+
+            fig.add_trace(go.Bar(
+                x=df['Bot'],
+                y=df['P&L'],
+                marker_color=colors,
+                text=[f"${x:+,.0f}" for x in df['P&L']],
+                textposition='outside',
+            ))
+
+            fig.update_layout(
+                plot_bgcolor='#0d1117',
+                paper_bgcolor='#0d1117',
+                font=dict(color='#8b949e'),
+                margin=dict(l=40, r=20, t=20, b=60),
+                height=300,
+                xaxis=dict(showgrid=False, tickangle=45),
+                yaxis=dict(showgrid=True, gridcolor='#21262d', zeroline=True, zerolinecolor='#30363d'),
+                showlegend=False,
+            )
+
+            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
+        # Activity over time
+        st.markdown("#### ⏱️ Activity Timeline")
+        all_bets = tournament.all_bets[-100:]
+
+        if len(all_bets) >= 3:
+            hour_data = defaultdict(lambda: {'won': 0, 'lost': 0, 'open': 0})
+            for bet in all_bets:
+                hour = bet.placed_at.strftime('%H:00')
+                if bet.status == 'won':
+                    hour_data[hour]['won'] += 1
+                elif bet.status == 'lost':
+                    hour_data[hour]['lost'] += 1
+                else:
+                    hour_data[hour]['open'] += 1
+
+            hours = sorted(hour_data.keys())
+
+            fig = go.Figure()
+            fig.add_trace(go.Bar(name='Won', x=hours, y=[hour_data[h]['won'] for h in hours], marker_color='#3fb950'))
+            fig.add_trace(go.Bar(name='Lost', x=hours, y=[hour_data[h]['lost'] for h in hours], marker_color='#f85149'))
+            fig.add_trace(go.Bar(name='Open', x=hours, y=[hour_data[h]['open'] for h in hours], marker_color='#d29922'))
+
+            fig.update_layout(
+                barmode='stack',
+                plot_bgcolor='#0d1117',
+                paper_bgcolor='#0d1117',
+                font=dict(color='#8b949e'),
+                margin=dict(l=40, r=20, t=20, b=40),
+                height=200,
+                xaxis=dict(showgrid=False),
+                yaxis=dict(showgrid=True, gridcolor='#21262d'),
+                legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+            )
+
+            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
+    with col_right:
+        # Top performers
+        st.markdown("#### 🏆 Leaderboard")
+
+        for i, bot in enumerate(rankings[:5]):
+            rank = i + 1
+            rank_emoji = "🥇" if rank == 1 else "🥈" if rank == 2 else "🥉" if rank == 3 else f"#{rank}"
+            pnl = bot['total_pnl']
+            pnl_class = "positive" if pnl >= 0 else "negative"
+            wr = bot.get('win_rate', 0) * 100
+
+            st.markdown(f"""
+            <div style="background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 12px; margin-bottom: 8px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <span style="font-size: 18px; margin-right: 8px;">{rank_emoji}</span>
+                        <span style="color: #f0f6fc; font-weight: 500;">{bot['name'][:15]}</span>
+                    </div>
+                    <span class="{pnl_class}" style="font-weight: 600;">${pnl:+,.0f}</span>
+                </div>
+                <div style="color: #8b949e; font-size: 12px; margin-top: 4px;">
+                    Win Rate: {wr:.0f}% • {bot.get('total_bets', 0)} bets
+                </div>
             </div>
-            <div class="stat-block">
-                <div class="stat-value {pnl_class}">{'+' if total_pnl >= 0 else ''}{total_pnl:,.0f}</div>
-                <div class="stat-label">P&L</div>
+            """, unsafe_allow_html=True)
+
+        # Recent news
+        st.markdown("#### 📰 Latest News")
+        news = fetch_news()
+
+        for item in news[:5]:
+            age_min = int(item.age_seconds / 60)
+            is_breaking = item.freshness_score > 0.8
+            breaking_badge = "🔴 " if is_breaking else ""
+
+            st.markdown(f"""
+            <div style="background: #161b22; border: 1px solid #21262d; border-radius: 6px; padding: 10px; margin-bottom: 6px;">
+                <div style="color: #c9d1d9; font-size: 12px; line-height: 1.4;">{breaking_badge}{item.title[:60]}...</div>
+                <div style="color: #8b949e; font-size: 10px; margin-top: 4px;">{item.source.split(':')[-1][:10]} • {age_min}m ago</div>
             </div>
-            <div class="stat-block">
-                <div class="stat-value">{win_rate:.1f}%</div>
-                <div class="stat-label">Win Rate</div>
-            </div>
-            <div class="stat-block">
-                <div class="stat-value">{total_bets}</div>
-                <div class="stat-label">Bets</div>
-            </div>
-            <div class="stat-block">
-                <div class="stat-value">{open_positions}</div>
-                <div class="stat-label">Open</div>
-            </div>
-            <div class="stat-block">
-                <div class="stat-value">{active_bots}/{len(tournament.bots)}</div>
-                <div class="stat-label">Bots</div>
-            </div>
-            <div class="live-badge">● LIVE</div>
-        </div>
-    </div>
-    """)
+            """, unsafe_allow_html=True)
 
 
-def render_bot_table():
-    """Render compact bot performance table."""
+# ============================================================================
+# TAB 2: BOTS
+# ============================================================================
+
+def render_bots_tab():
+    """Bots tab with detailed bot performance and management."""
     tournament = get_tournament()
     rankings = tournament.get_rankings()
 
-    rows = ""
-    for i, bot in enumerate(rankings):
-        rank = i + 1
-        rank_class = f"rank-{rank}" if rank <= 3 else ""
+    st.markdown("#### Bot Performance Overview")
 
-        name = bot['name']
-        pnl = bot['total_pnl']
-        pnl_class = "positive" if pnl >= 0 else "negative"
+    # Summary metrics
+    col1, col2, col3, col4 = st.columns(4)
+    active = len([b for b in tournament.bots.values() if b.status != BotStatus.ELIMINATED])
+    total_pnl = sum(r['total_pnl'] for r in rankings)
+    avg_wr = sum(r.get('win_rate', 0) for r in rankings) / len(rankings) * 100 if rankings else 0
 
-        wins = bot.get('winning_bets', 0)
-        total = bot.get('total_bets', 0)
-        losses = total - wins
-        wr = (wins / total * 100) if total > 0 else 0
+    with col1:
+        st.metric("Active Bots", f"{active}/{len(tournament.bots)}")
+    with col2:
+        st.metric("Combined P&L", f"${total_pnl:+,.0f}")
+    with col3:
+        st.metric("Avg Win Rate", f"{avg_wr:.1f}%")
+    with col4:
+        best = rankings[0]['name'] if rankings else "N/A"
+        st.metric("Top Performer", best[:12])
 
-        capital = bot.get('current_capital', 1000)
-        open_count = bot.get('open_bets_count', 0)
-        days = bot.get('days_evaluated', 0)
+    st.markdown("---")
 
-        # Win rate bar
-        bar_width = min(wr, 100)
-        bar_class = "win" if wr >= 50 else "loss"
+    # Detailed bot table
+    st.markdown("#### Detailed Bot Statistics")
 
-        # Activity indicator
-        activity = "active" if open_count > 0 else "idle"
+    # Create dataframe for display
+    bot_data = []
+    for i, r in enumerate(rankings):
+        bot = tournament.bots.get(r['name'])
+        bot_data.append({
+            'Rank': i + 1,
+            'Bot': r['name'],
+            'Status': '🟢 Active' if r.get('status') != 'eliminated' else '🔴 Eliminated',
+            'Capital': f"${r.get('current_capital', 1000):,.0f}",
+            'P&L': r['total_pnl'],
+            'Win Rate': f"{r.get('win_rate', 0)*100:.1f}%",
+            'Wins': r.get('winning_bets', 0),
+            'Losses': r.get('total_bets', 0) - r.get('winning_bets', 0),
+            'Open': r.get('open_bets_count', 0),
+            'Day': f"{r.get('days_evaluated', 0)}/3",
+            'Sharpe': f"{r.get('sharpe_ratio', 0):.2f}",
+            'Drawdown': f"{r.get('max_drawdown', 0)*100:.1f}%",
+        })
 
-        # Hot indicator
-        hot = "🔥" if wr > 60 and total >= 5 else ""
+    df = pd.DataFrame(bot_data)
 
-        rows += f"""
-        <tr>
-            <td class="{rank_class}">#{rank}</td>
-            <td><span class="activity-dot activity-{activity}"></span>{name[:15]}</td>
-            <td class="{pnl_class}">{'+' if pnl >= 0 else ''}{pnl:.0f}</td>
-            <td>${capital:,.0f}</td>
-            <td>{wins}/{losses}</td>
-            <td>
-                <span class="mini-bar"><span class="mini-bar-fill {bar_class}" style="width:{bar_width}%"></span></span>
-                {wr:.0f}%
-            </td>
-            <td>{open_count}</td>
-            <td>D{days}/3</td>
-            <td class="hot">{hot}</td>
-        </tr>
-        """
+    # Style the P&L column
+    def color_pnl(val):
+        if isinstance(val, (int, float)):
+            color = '#3fb950' if val >= 0 else '#f85149'
+            return f'color: {color}; font-weight: 600'
+        return ''
 
-    st.html(f"""
-    <div class="panel">
-        <div class="panel-header">
-            <span class="panel-title">Bot Performance</span>
-            <span class="panel-badge">{len(rankings)} active</span>
-        </div>
-        <div class="panel-content">
-            <table class="data-table">
-                <thead>
-                    <tr>
-                        <th>#</th>
-                        <th>Bot</th>
-                        <th>P&L</th>
-                        <th>Capital</th>
-                        <th>W/L</th>
-                        <th>Win%</th>
-                        <th>Open</th>
-                        <th>Day</th>
-                        <th></th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {rows}
-                </tbody>
-            </table>
-        </div>
-    </div>
-    """)
+    styled_df = df.style.applymap(color_pnl, subset=['P&L']).format({'P&L': '${:+,.0f}'})
 
+    st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
-def render_markets():
-    """Render live markets panel."""
-    markets = fetch_live_markets()
+    st.markdown("---")
 
-    rows = ""
-    for m in markets[:12]:
-        yes = int(m['yes_price'] * 100)
-        no = 100 - yes
-        vol = m['volume_24h']
+    # Individual bot details
+    st.markdown("#### Individual Bot Analysis")
 
-        if vol >= 1000000:
-            vol_str = f"${vol/1000000:.1f}M"
-        elif vol >= 1000:
-            vol_str = f"${vol/1000:.0f}K"
-        else:
-            vol_str = f"${vol:.0f}"
+    selected_bot = st.selectbox("Select Bot", [r['name'] for r in rankings])
 
-        q = m['question'][:50] + ('...' if len(m['question']) > 50 else '')
+    if selected_bot:
+        bot = tournament.bots.get(selected_bot)
+        bot_ranking = next((r for r in rankings if r['name'] == selected_bot), None)
 
-        rows += f"""
-        <div class="market-row">
-            <span class="market-q">{q}</span>
-            <div class="market-prices">
-                <span class="price-tag price-yes">{yes}¢</span>
-                <span class="price-tag price-no">{no}¢</span>
-            </div>
-            <span class="market-vol">{vol_str}</span>
-        </div>
-        """
+        if bot and bot_ranking:
+            col1, col2 = st.columns([1, 2])
 
-    st.html(f"""
-    <div class="panel">
-        <div class="panel-header">
-            <span class="panel-title">Live Markets</span>
-            <span class="panel-badge">{len(markets)} active</span>
-        </div>
-        <div class="scroll-panel">
-            {rows}
-        </div>
-    </div>
-    """)
+            with col1:
+                st.markdown("**Bot Details**")
+                st.markdown(f"""
+                - **Name:** {bot.name}
+                - **Tier:** {bot.tier.value}
+                - **Status:** {bot.status.value}
+                - **Generation:** {bot.generation}
+                - **Days Evaluated:** {bot.days_evaluated}/3
+                """)
+
+                st.markdown("**Performance Metrics**")
+                st.markdown(f"""
+                - **Capital:** ${bot.current_capital:,.2f}
+                - **Peak Capital:** ${bot.peak_capital:,.2f}
+                - **Total P&L:** ${bot_ranking['total_pnl']:+,.2f}
+                - **ROI:** {bot_ranking.get('roi', 0)*100:+.2f}%
+                - **Win Rate:** {bot_ranking.get('win_rate', 0)*100:.1f}%
+                - **Sharpe Ratio:** {bot.sharpe_ratio:.3f}
+                - **Max Drawdown:** {bot.max_drawdown*100:.2f}%
+                """)
+
+            with col2:
+                # Bot's recent trades
+                st.markdown("**Recent Trades**")
+                recent_bets = [b for b in tournament.all_bets if b.bot_id == selected_bot][-10:]
+
+                if recent_bets:
+                    trade_data = []
+                    for bet in reversed(recent_bets):
+                        trade_data.append({
+                            'Time': bet.placed_at.strftime('%H:%M'),
+                            'Market': bet.market_question[:40] + '...',
+                            'Side': bet.side.upper(),
+                            'Amount': f"${bet.amount:.0f}",
+                            'Entry': f"{bet.entry_price*100:.0f}¢",
+                            'Status': bet.status.upper(),
+                            'P&L': f"${bet.pnl:+.0f}" if bet.pnl else '-'
+                        })
+
+                    st.dataframe(pd.DataFrame(trade_data), use_container_width=True, hide_index=True)
+                else:
+                    st.info("No trades yet for this bot")
 
 
-def render_news():
-    """Render news feed panel."""
-    news = fetch_news()
+# ============================================================================
+# TAB 3: POSITIONS
+# ============================================================================
 
-    rows = ""
-    for item in news[:12]:
-        age_min = int(item.age_seconds / 60)
-        is_breaking = item.freshness_score > 0.8
-
-        title = item.title[:65] + ('...' if len(item.title) > 65 else '')
-        source = item.source.split(':')[-1][:8].upper()
-
-        # Sentiment
-        if item.sentiment_hint > 0.2:
-            sent_class = "news-sentiment-up"
-            sent_icon = "▲"
-        elif item.sentiment_hint < -0.2:
-            sent_class = "news-sentiment-down"
-            sent_icon = "▼"
-        else:
-            sent_class = ""
-            sent_icon = ""
-
-        breaking = '<span class="news-breaking">BREAKING</span>' if is_breaking else ""
-
-        rows += f"""
-        <div class="news-row">
-            <div class="news-title"><span class="{sent_class}">{sent_icon}</span> {title}</div>
-            <div class="news-meta">
-                <span class="news-source">{source}</span>
-                <span class="news-time">{age_min}m</span>
-                {breaking}
-            </div>
-        </div>
-        """
-
-    st.html(f"""
-    <div class="panel">
-        <div class="panel-header">
-            <span class="panel-title">News Feed</span>
-            <span class="panel-badge">{len(news)} items</span>
-        </div>
-        <div class="scroll-panel">
-            {rows}
-        </div>
-    </div>
-    """)
-
-
-def render_positions():
-    """Render open positions panel."""
+def render_positions_tab():
+    """Positions tab showing all open positions."""
     tournament = get_tournament()
-    all_open = []
 
+    # Gather all open positions
+    all_positions = []
     for bot in tournament.bots.values():
         for bet in bot.open_bets:
-            all_open.append({
-                'bot': bot.name[:10],
-                'market': bet.market_question[:35],
-                'side': bet.side.upper(),
-                'amount': bet.amount,
-                'entry': bet.entry_price,
-                'placed': bet.placed_at,
+            age = (datetime.now() - bet.placed_at).total_seconds() / 60
+            all_positions.append({
+                'bot_name': bot.name,
+                'bet': bet,
+                'age_min': age
             })
 
-    # Sort by placed time
-    all_open.sort(key=lambda x: x['placed'], reverse=True)
+    # Summary
+    col1, col2, col3, col4 = st.columns(4)
 
-    rows = ""
-    for pos in all_open[:10]:
-        side_class = "positive" if pos['side'] == 'YES' else "negative"
-        age = (datetime.now() - pos['placed']).total_seconds() / 60
+    total_exposure = sum(p['bet'].amount for p in all_positions)
+    yes_positions = len([p for p in all_positions if p['bet'].side == 'yes'])
+    no_positions = len([p for p in all_positions if p['bet'].side == 'no'])
+    avg_entry = sum(p['bet'].entry_price for p in all_positions) / len(all_positions) * 100 if all_positions else 0
 
-        rows += f"""
-        <div class="market-row">
-            <span style="width:70px;color:#666;">{pos['bot']}</span>
-            <span class="market-q">{pos['market']}...</span>
-            <span class="{side_class}" style="width:35px;">{pos['side']}</span>
-            <span style="width:50px;text-align:right;">${pos['amount']:.0f}</span>
-            <span style="width:40px;text-align:right;color:#666;">{pos['entry']*100:.0f}¢</span>
-            <span style="width:40px;text-align:right;color:#444;">{age:.0f}m</span>
-        </div>
-        """
+    with col1:
+        st.metric("Open Positions", len(all_positions))
+    with col2:
+        st.metric("Total Exposure", f"${total_exposure:,.0f}")
+    with col3:
+        st.metric("YES / NO", f"{yes_positions} / {no_positions}")
+    with col4:
+        st.metric("Avg Entry", f"{avg_entry:.0f}¢")
 
-    if not rows:
-        rows = '<div style="padding:20px;color:#444;text-align:center;">No open positions</div>'
+    st.markdown("---")
 
-    st.html(f"""
-    <div class="panel">
-        <div class="panel-header">
-            <span class="panel-title">Open Positions</span>
-            <span class="panel-badge">{len(all_open)} positions</span>
-        </div>
-        <div class="scroll-panel">
-            {rows}
-        </div>
-    </div>
-    """)
+    if all_positions:
+        # Sort by age
+        all_positions.sort(key=lambda x: x['age_min'])
 
+        st.markdown("#### All Open Positions")
 
-def render_recent_bets():
-    """Render recent bets panel."""
-    tournament = get_tournament()
-    recent = tournament.all_bets[-15:]
-    recent.reverse()
+        position_data = []
+        for p in all_positions:
+            bet = p['bet']
+            position_data.append({
+                'Bot': p['bot_name'][:12],
+                'Market': bet.market_question[:50] + '...',
+                'Side': bet.side.upper(),
+                'Amount': f"${bet.amount:.0f}",
+                'Entry Price': f"{bet.entry_price*100:.0f}¢",
+                'Age': f"{p['age_min']:.0f}m",
+                'Matures': bet.matures_at.strftime('%m/%d %H:%M') if bet.matures_at else '-'
+            })
 
-    rows = ""
-    for bet in recent:
-        if bet.status == 'won':
-            status = '<span class="positive">WIN</span>'
-            pnl_str = f'<span class="positive">+{bet.pnl:.0f}</span>' if bet.pnl else ''
-        elif bet.status == 'lost':
-            status = '<span class="negative">LOSS</span>'
-            pnl_str = f'<span class="negative">{bet.pnl:.0f}</span>' if bet.pnl else ''
-        else:
-            status = '<span class="neutral">OPEN</span>'
-            pnl_str = ''
+        df = pd.DataFrame(position_data)
 
-        side_class = "positive" if bet.side == 'yes' else "negative"
-        market = bet.market_question[:30] + '...' if len(bet.market_question) > 30 else bet.market_question
+        # Color the Side column
+        def color_side(val):
+            if val == 'YES':
+                return 'color: #3fb950; font-weight: 600'
+            elif val == 'NO':
+                return 'color: #f85149; font-weight: 600'
+            return ''
 
-        rows += f"""
-        <div class="market-row">
-            <span style="width:35px;">{status}</span>
-            <span style="width:70px;color:#666;">{bet.bot_id[:10]}</span>
-            <span class="market-q">{market}</span>
-            <span class="{side_class}" style="width:30px;">{bet.side.upper()[:1]}</span>
-            <span style="width:45px;text-align:right;">${bet.amount:.0f}</span>
-            <span style="width:45px;text-align:right;">{pnl_str}</span>
-        </div>
-        """
+        styled_df = df.style.applymap(color_side, subset=['Side'])
+        st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
-    if not rows:
-        rows = '<div style="padding:20px;color:#444;text-align:center;">No bets yet</div>'
+        # Position breakdown by bot
+        st.markdown("---")
+        st.markdown("#### Positions by Bot")
 
-    st.html(f"""
-    <div class="panel">
-        <div class="panel-header">
-            <span class="panel-title">Recent Activity</span>
-            <span class="panel-badge">{len(tournament.all_bets)} total</span>
-        </div>
-        <div class="scroll-panel">
-            {rows}
-        </div>
-    </div>
-    """)
+        bot_positions = defaultdict(list)
+        for p in all_positions:
+            bot_positions[p['bot_name']].append(p)
+
+        cols = st.columns(min(len(bot_positions), 4))
+        for i, (bot_name, positions) in enumerate(bot_positions.items()):
+            with cols[i % 4]:
+                total = sum(p['bet'].amount for p in positions)
+                st.markdown(f"""
+                <div style="background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 12px;">
+                    <div style="color: #f0f6fc; font-weight: 600;">{bot_name[:12]}</div>
+                    <div style="color: #8b949e; font-size: 12px; margin-top: 4px;">
+                        {len(positions)} positions • ${total:.0f} exposure
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+    else:
+        st.info("No open positions")
 
 
-def render_performance_chart():
-    """Render P&L chart."""
-    tournament = get_tournament()
-    rankings = tournament.get_rankings()
+# ============================================================================
+# TAB 4: HISTORY
+# ============================================================================
 
-    if not rankings:
-        return
-
-    names = [r['name'][:12] for r in rankings]
-    pnls = [r['total_pnl'] for r in rankings]
-    colors = ['#00ff88' if p >= 0 else '#ff4757' for p in pnls]
-
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=names,
-        y=pnls,
-        marker_color=colors,
-        text=[f"{p:+.0f}" for p in pnls],
-        textposition='outside',
-        textfont=dict(size=9, color='#888', family='Monaco'),
-    ))
-
-    fig.add_hline(y=0, line_color='#2a2a3a', line_width=1)
-
-    fig.update_layout(
-        plot_bgcolor='#0d0d12',
-        paper_bgcolor='#0d0d12',
-        font=dict(color='#555', size=9, family='Monaco'),
-        margin=dict(l=40, r=10, t=30, b=50),
-        height=180,
-        xaxis=dict(showgrid=False, tickangle=45),
-        yaxis=dict(showgrid=True, gridcolor='#1a1a24', zeroline=False, tickformat='+'),
-        showlegend=False,
-        title=dict(text='P&L BY BOT', font=dict(size=10, color='#555'), x=0.02),
-    )
-
-    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-
-
-def render_winrate_chart():
-    """Render win rate chart."""
-    tournament = get_tournament()
-    rankings = [r for r in tournament.get_rankings() if r.get('total_bets', 0) > 0]
-
-    if not rankings:
-        return
-
-    names = [r['name'][:12] for r in rankings]
-    wrs = [r.get('win_rate', 0) * 100 for r in rankings]
-    colors = ['#00ff88' if w >= 50 else '#ff4757' for w in wrs]
-
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=names,
-        y=wrs,
-        marker_color=colors,
-        text=[f"{w:.0f}%" for w in wrs],
-        textposition='outside',
-        textfont=dict(size=9, color='#888', family='Monaco'),
-    ))
-
-    fig.add_hline(y=50, line_color='#2a2a3a', line_width=1, line_dash='dot')
-
-    fig.update_layout(
-        plot_bgcolor='#0d0d12',
-        paper_bgcolor='#0d0d12',
-        font=dict(color='#555', size=9, family='Monaco'),
-        margin=dict(l=40, r=10, t=30, b=50),
-        height=180,
-        xaxis=dict(showgrid=False, tickangle=45),
-        yaxis=dict(showgrid=True, gridcolor='#1a1a24', range=[0, 100]),
-        showlegend=False,
-        title=dict(text='WIN RATE', font=dict(size=10, color='#555'), x=0.02),
-    )
-
-    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-
-
-def render_activity_chart():
-    """Render activity timeline."""
-    tournament = get_tournament()
-    all_bets = tournament.all_bets[-50:]
-
-    if len(all_bets) < 3:
-        return
-
-    hour_data = defaultdict(lambda: {'won': 0, 'lost': 0, 'open': 0})
-    for bet in all_bets:
-        hour = bet.placed_at.strftime('%H:00')
-        if bet.status == 'won':
-            hour_data[hour]['won'] += 1
-        elif bet.status == 'lost':
-            hour_data[hour]['lost'] += 1
-        else:
-            hour_data[hour]['open'] += 1
-
-    hours = sorted(hour_data.keys())
-
-    fig = go.Figure()
-    fig.add_trace(go.Bar(name='Won', x=hours, y=[hour_data[h]['won'] for h in hours], marker_color='#00ff88'))
-    fig.add_trace(go.Bar(name='Lost', x=hours, y=[hour_data[h]['lost'] for h in hours], marker_color='#ff4757'))
-    fig.add_trace(go.Bar(name='Open', x=hours, y=[hour_data[h]['open'] for h in hours], marker_color='#ff9f43'))
-
-    fig.update_layout(
-        barmode='stack',
-        plot_bgcolor='#0d0d12',
-        paper_bgcolor='#0d0d12',
-        font=dict(color='#555', size=9, family='Monaco'),
-        margin=dict(l=40, r=10, t=30, b=40),
-        height=180,
-        xaxis=dict(showgrid=False),
-        yaxis=dict(showgrid=True, gridcolor='#1a1a24'),
-        legend=dict(orientation='h', yanchor='top', y=1.15, xanchor='right', x=1, font=dict(size=8)),
-        title=dict(text='ACTIVITY', font=dict(size=10, color='#555'), x=0.02),
-    )
-
-    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-
-
-def render_market_sentiment():
-    """Render market sentiment gauge."""
-    markets = fetch_live_markets()
-
-    if not markets:
-        return
-
-    bullish = sum(1 for m in markets if m['yes_price'] > 0.6)
-    neutral = sum(1 for m in markets if 0.4 <= m['yes_price'] <= 0.6)
-    bearish = sum(1 for m in markets if m['yes_price'] < 0.4)
-
-    total = len(markets)
-    sentiment = (bullish - bearish) / total if total > 0 else 0
-
-    fig = go.Figure(go.Indicator(
-        mode="gauge+number",
-        value=sentiment * 100,
-        number={'suffix': '%', 'font': {'size': 24, 'color': '#888', 'family': 'Monaco'}},
-        gauge={
-            'axis': {'range': [-100, 100], 'tickcolor': '#333'},
-            'bar': {'color': '#00ff88' if sentiment > 0 else '#ff4757'},
-            'bgcolor': '#1a1a24',
-            'borderwidth': 0,
-            'steps': [
-                {'range': [-100, -30], 'color': 'rgba(255,71,87,0.2)'},
-                {'range': [-30, 30], 'color': 'rgba(136,136,136,0.1)'},
-                {'range': [30, 100], 'color': 'rgba(0,255,136,0.2)'},
-            ],
-        }
-    ))
-
-    fig.update_layout(
-        plot_bgcolor='#0d0d12',
-        paper_bgcolor='#0d0d12',
-        font=dict(color='#555', size=9, family='Monaco'),
-        margin=dict(l=20, r=20, t=40, b=10),
-        height=160,
-        title=dict(text='MARKET SENTIMENT', font=dict(size=10, color='#555'), x=0.5, xanchor='center'),
-    )
-
-    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-
-
-def render_controls():
-    """Render control buttons."""
+def render_history_tab():
+    """History tab with trade log and filters."""
     tournament = get_tournament()
 
+    st.markdown("#### Trade History")
+
+    # Filters
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        if st.button("▶ SIMULATE", use_container_width=True):
-            tournament.simulate_round()
-            st.cache_data.clear()
-            st.rerun()
-
+        status_filter = st.selectbox("Status", ["All", "Won", "Lost", "Open"])
     with col2:
-        if st.button("◉ EVALUATE", use_container_width=True):
-            tournament.run_daily_evaluation()
-            st.cache_data.clear()
-            st.rerun()
-
+        bot_names = ["All"] + [b.name for b in tournament.bots.values()]
+        bot_filter = st.selectbox("Bot", bot_names)
     with col3:
-        if st.button("↻ REFRESH", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
-
+        side_filter = st.selectbox("Side", ["All", "YES", "NO"])
     with col4:
-        auto = st.checkbox("Auto-refresh", value=False)
-        if auto:
-            time.sleep(10)
-            st.rerun()
+        limit = st.selectbox("Show", [25, 50, 100, 200], index=1)
+
+    # Get filtered bets
+    all_bets = list(tournament.all_bets)
+    all_bets.reverse()  # Most recent first
+
+    filtered_bets = []
+    for bet in all_bets:
+        if status_filter != "All" and bet.status.lower() != status_filter.lower():
+            continue
+        if bot_filter != "All" and bet.bot_id != bot_filter:
+            continue
+        if side_filter != "All" and bet.side.upper() != side_filter:
+            continue
+        filtered_bets.append(bet)
+        if len(filtered_bets) >= limit:
+            break
+
+    # Summary stats
+    wins = len([b for b in filtered_bets if b.status == 'won'])
+    losses = len([b for b in filtered_bets if b.status == 'lost'])
+    total_pnl = sum(b.pnl or 0 for b in filtered_bets)
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Showing", f"{len(filtered_bets)} trades")
+    with col2:
+        st.metric("Wins / Losses", f"{wins} / {losses}")
+    with col3:
+        wr = (wins / (wins + losses) * 100) if (wins + losses) > 0 else 0
+        st.metric("Win Rate", f"{wr:.1f}%")
+    with col4:
+        st.metric("Total P&L", f"${total_pnl:+,.0f}")
+
+    st.markdown("---")
+
+    # Trade table
+    if filtered_bets:
+        trade_data = []
+        for bet in filtered_bets:
+            status_badge = "🟢 WIN" if bet.status == 'won' else "🔴 LOSS" if bet.status == 'lost' else "🟡 OPEN"
+            trade_data.append({
+                'Time': bet.placed_at.strftime('%m/%d %H:%M'),
+                'Bot': bet.bot_id[:12],
+                'Market': bet.market_question[:45] + '...',
+                'Side': bet.side.upper(),
+                'Amount': f"${bet.amount:.0f}",
+                'Entry': f"{bet.entry_price*100:.0f}¢",
+                'Exit': f"{bet.exit_price*100:.0f}¢" if bet.exit_price else '-',
+                'P&L': bet.pnl if bet.pnl else 0,
+                'Status': status_badge
+            })
+
+        df = pd.DataFrame(trade_data)
+
+        def color_pnl(val):
+            if isinstance(val, (int, float)):
+                if val > 0:
+                    return 'color: #3fb950; font-weight: 600'
+                elif val < 0:
+                    return 'color: #f85149; font-weight: 600'
+            return ''
+
+        styled_df = df.style.applymap(color_pnl, subset=['P&L']).format({'P&L': '${:+,.0f}'})
+        st.dataframe(styled_df, use_container_width=True, hide_index=True, height=500)
+    else:
+        st.info("No trades matching filters")
 
 
 # ============================================================================
-# MAIN LAYOUT
+# TAB 5: MARKETS
+# ============================================================================
+
+def render_markets_tab():
+    """Markets tab with live market data."""
+    markets = fetch_live_markets()
+
+    st.markdown("#### Live Prediction Markets")
+
+    # Summary
+    col1, col2, col3, col4 = st.columns(4)
+
+    total_volume = sum(m['volume_24h'] for m in markets)
+    bullish = len([m for m in markets if m['yes_price'] > 0.6])
+    bearish = len([m for m in markets if m['yes_price'] < 0.4])
+    neutral = len(markets) - bullish - bearish
+
+    with col1:
+        st.metric("Active Markets", len(markets))
+    with col2:
+        st.metric("24h Volume", f"${total_volume/1000000:.1f}M")
+    with col3:
+        st.metric("Bullish / Bearish", f"{bullish} / {bearish}")
+    with col4:
+        sentiment = (bullish - bearish) / len(markets) * 100 if markets else 0
+        st.metric("Market Sentiment", f"{sentiment:+.0f}%")
+
+    st.markdown("---")
+
+    # Category filter
+    categories = list(set(m['category'] for m in markets if m['category']))
+    categories = ["All"] + sorted(categories)
+    category_filter = st.selectbox("Category", categories)
+
+    # Filter markets
+    if category_filter != "All":
+        markets = [m for m in markets if m['category'] == category_filter]
+
+    # Market table
+    if markets:
+        market_data = []
+        for m in markets[:30]:
+            yes_pct = int(m['yes_price'] * 100)
+            no_pct = 100 - yes_pct
+
+            vol = m['volume_24h']
+            if vol >= 1000000:
+                vol_str = f"${vol/1000000:.1f}M"
+            elif vol >= 1000:
+                vol_str = f"${vol/1000:.0f}K"
+            else:
+                vol_str = f"${vol:.0f}"
+
+            market_data.append({
+                'Market': m['question'][:60] + ('...' if len(m['question']) > 60 else ''),
+                'YES': f"{yes_pct}¢",
+                'NO': f"{no_pct}¢",
+                '24h Volume': vol_str,
+                'Category': m['category'] or '-'
+            })
+
+        st.dataframe(pd.DataFrame(market_data), use_container_width=True, hide_index=True, height=500)
+    else:
+        st.info("No markets available")
+
+
+# ============================================================================
+# TAB 6: ANALYTICS
+# ============================================================================
+
+def render_analytics_tab():
+    """Analytics tab with deep performance analysis."""
+    tournament = get_tournament()
+    rankings = tournament.get_rankings()
+
+    st.markdown("#### Performance Analytics")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        # Win rate comparison
+        st.markdown("##### Win Rate by Bot")
+
+        if rankings:
+            active_rankings = [r for r in rankings if r.get('total_bets', 0) > 0]
+
+            if active_rankings:
+                fig = go.Figure()
+
+                names = [r['name'][:12] for r in active_rankings]
+                wrs = [r.get('win_rate', 0) * 100 for r in active_rankings]
+                colors = ['#3fb950' if w >= 50 else '#f85149' for w in wrs]
+
+                fig.add_trace(go.Bar(
+                    x=names,
+                    y=wrs,
+                    marker_color=colors,
+                    text=[f"{w:.0f}%" for w in wrs],
+                    textposition='outside',
+                ))
+
+                fig.add_hline(y=50, line_dash="dash", line_color="#8b949e", opacity=0.5)
+
+                fig.update_layout(
+                    plot_bgcolor='#0d1117',
+                    paper_bgcolor='#0d1117',
+                    font=dict(color='#8b949e'),
+                    margin=dict(l=40, r=20, t=20, b=60),
+                    height=300,
+                    xaxis=dict(showgrid=False, tickangle=45),
+                    yaxis=dict(showgrid=True, gridcolor='#21262d', range=[0, 100]),
+                    showlegend=False,
+                )
+
+                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
+    with col2:
+        # Risk metrics
+        st.markdown("##### Risk Metrics")
+
+        if rankings:
+            risk_data = []
+            for r in rankings:
+                risk_data.append({
+                    'Bot': r['name'][:12],
+                    'Sharpe': r.get('sharpe_ratio', 0),
+                    'Max DD': f"{r.get('max_drawdown', 0)*100:.1f}%",
+                    'ROI': f"{r.get('roi', 0)*100:+.1f}%"
+                })
+
+            st.dataframe(pd.DataFrame(risk_data), use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+
+    # Cumulative P&L chart
+    st.markdown("##### Cumulative P&L Over Time")
+
+    all_bets = tournament.all_bets
+
+    if len(all_bets) >= 5:
+        # Group by bot and track cumulative P&L
+        bot_pnl_over_time = defaultdict(list)
+
+        for bet in all_bets:
+            if bet.pnl is not None:
+                bot_pnl_over_time[bet.bot_id].append({
+                    'time': bet.resolved_at or bet.placed_at,
+                    'pnl': bet.pnl
+                })
+
+        fig = go.Figure()
+
+        colors = ['#3fb950', '#388bfd', '#d29922', '#a371f7', '#f85149', '#8b949e', '#f778ba']
+
+        for i, (bot_name, trades) in enumerate(bot_pnl_over_time.items()):
+            if trades:
+                trades.sort(key=lambda x: x['time'])
+                cumulative = 0
+                times = []
+                values = []
+                for t in trades:
+                    cumulative += t['pnl']
+                    times.append(t['time'])
+                    values.append(cumulative)
+
+                fig.add_trace(go.Scatter(
+                    x=times,
+                    y=values,
+                    name=bot_name[:12],
+                    mode='lines',
+                    line=dict(color=colors[i % len(colors)], width=2),
+                ))
+
+        fig.add_hline(y=0, line_color='#30363d', line_width=1)
+
+        fig.update_layout(
+            plot_bgcolor='#0d1117',
+            paper_bgcolor='#0d1117',
+            font=dict(color='#8b949e'),
+            margin=dict(l=40, r=20, t=20, b=40),
+            height=350,
+            xaxis=dict(showgrid=False),
+            yaxis=dict(showgrid=True, gridcolor='#21262d', tickformat='$,.0f'),
+            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+        )
+
+        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+    else:
+        st.info("Not enough data for cumulative P&L chart")
+
+    # Side analysis
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("##### Bet Side Distribution")
+
+        all_bets = tournament.all_bets
+        yes_bets = len([b for b in all_bets if b.side == 'yes'])
+        no_bets = len([b for b in all_bets if b.side == 'no'])
+
+        if yes_bets + no_bets > 0:
+            fig = go.Figure(data=[go.Pie(
+                labels=['YES', 'NO'],
+                values=[yes_bets, no_bets],
+                hole=0.5,
+                marker_colors=['#3fb950', '#f85149'],
+                textinfo='percent+value',
+            )])
+
+            fig.update_layout(
+                plot_bgcolor='#0d1117',
+                paper_bgcolor='#0d1117',
+                font=dict(color='#8b949e'),
+                margin=dict(l=20, r=20, t=20, b=20),
+                height=250,
+                showlegend=True,
+                legend=dict(orientation='h', yanchor='bottom', y=-0.1, xanchor='center', x=0.5),
+            )
+
+            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
+    with col2:
+        st.markdown("##### Outcome Distribution")
+
+        won = len([b for b in all_bets if b.status == 'won'])
+        lost = len([b for b in all_bets if b.status == 'lost'])
+        pending = len([b for b in all_bets if b.status not in ['won', 'lost']])
+
+        if won + lost + pending > 0:
+            fig = go.Figure(data=[go.Pie(
+                labels=['Won', 'Lost', 'Pending'],
+                values=[won, lost, pending],
+                hole=0.5,
+                marker_colors=['#3fb950', '#f85149', '#d29922'],
+                textinfo='percent+value',
+            )])
+
+            fig.update_layout(
+                plot_bgcolor='#0d1117',
+                paper_bgcolor='#0d1117',
+                font=dict(color='#8b949e'),
+                margin=dict(l=20, r=20, t=20, b=20),
+                height=250,
+                showlegend=True,
+                legend=dict(orientation='h', yanchor='bottom', y=-0.1, xanchor='center', x=0.5),
+            )
+
+            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
+
+# ============================================================================
+# MAIN
 # ============================================================================
 
 def main():
-    """Main dashboard layout."""
+    """Main application."""
 
-    # Top bar
-    render_top_bar()
+    # Render sidebar
+    render_sidebar()
 
-    # Controls
-    render_controls()
+    # Main content with tabs
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "📊 Overview",
+        "🤖 Bots",
+        "📈 Positions",
+        "📋 History",
+        "🌍 Markets",
+        "📉 Analytics"
+    ])
 
-    # Main grid - 4 columns
-    col1, col2, col3, col4 = st.columns([1.4, 1.2, 1.2, 1.2])
+    with tab1:
+        render_overview_tab()
 
-    with col1:
-        render_bot_table()
-        render_positions()
+    with tab2:
+        render_bots_tab()
 
-    with col2:
-        render_markets()
+    with tab3:
+        render_positions_tab()
 
-    with col3:
-        render_news()
+    with tab4:
+        render_history_tab()
 
-    with col4:
-        render_recent_bets()
+    with tab5:
+        render_markets_tab()
 
-    # Charts row
-    c1, c2, c3, c4 = st.columns(4)
-
-    with c1:
-        render_performance_chart()
-
-    with c2:
-        render_winrate_chart()
-
-    with c3:
-        render_activity_chart()
-
-    with c4:
-        render_market_sentiment()
+    with tab6:
+        render_analytics_tab()
 
 
 if __name__ == "__main__":
