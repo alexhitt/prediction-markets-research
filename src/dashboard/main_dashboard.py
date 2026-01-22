@@ -1,16 +1,10 @@
 """
-Prediction Bot Arena - Gamified Trading Dashboard
-
-Watch your bots compete in real-time! Features:
-- Live bot competition with rankings and streaks
-- Strategy explanations and signal breakdowns
-- Market sentiment and trend analysis
-- System performance tracking
+Prediction Markets Command Center
+Sharp, data-dense trading interface with real-time monitoring.
 """
 
 import json
 import time
-import random
 from datetime import datetime, timedelta
 from pathlib import Path
 import sys
@@ -23,7 +17,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# Add project root
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.autonomous.tournament import BotTournament, BettingTier, BotStatus
@@ -33,367 +26,356 @@ from src.signals.fast_news import FastNewsSignalDetector
 # PAGE CONFIG
 # ============================================================================
 st.set_page_config(
-    page_title="Bot Arena",
-    page_icon="🏆",
+    page_title="Command Center",
+    page_icon="◉",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
 # ============================================================================
-# BOT PERSONALITIES - Makes each bot unique and memorable
-# ============================================================================
-BOT_PROFILES = {
-    "Aggressive Alpha": {
-        "emoji": "🦁",
-        "color": "#ff6b6b",
-        "personality": "Bold & Fearless",
-        "strategy": "High-risk, high-reward bets on volatile markets",
-        "strengths": ["Fast reactions", "Big wins"],
-        "weaknesses": ["Can lose big", "Impulsive"],
-    },
-    "Conservative Value": {
-        "emoji": "🦉",
-        "color": "#4ecdc4",
-        "personality": "Wise & Patient",
-        "strategy": "Steady gains through careful analysis",
-        "strengths": ["Consistent", "Low risk"],
-        "weaknesses": ["Misses big opportunities", "Slow"],
-    },
-    "News Racer": {
-        "emoji": "⚡",
-        "color": "#ffe66d",
-        "personality": "Lightning Fast",
-        "strategy": "First to react to breaking news",
-        "strengths": ["Speed", "News analysis"],
-        "weaknesses": ["Can overreact", "False signals"],
-    },
-    "Whale Watcher": {
-        "emoji": "🐋",
-        "color": "#6c5ce7",
-        "personality": "Strategic Follower",
-        "strategy": "Follows big money movements",
-        "strengths": ["Smart money tracking", "Trend following"],
-        "weaknesses": ["Late entries", "Crowded trades"],
-    },
-    "Sentiment Surfer": {
-        "emoji": "🏄",
-        "color": "#fd79a8",
-        "personality": "Crowd Reader",
-        "strategy": "Rides waves of public sentiment",
-        "strengths": ["Social signals", "Momentum"],
-        "weaknesses": ["Herd mentality", "Reversals"],
-    },
-    "Balanced Bot": {
-        "emoji": "⚖️",
-        "color": "#00b894",
-        "personality": "The Diplomat",
-        "strategy": "Balanced approach using all signals",
-        "strengths": ["Diversified", "Stable"],
-        "weaknesses": ["Average returns", "No specialty"],
-    },
-    "Contrarian Carl": {
-        "emoji": "🎭",
-        "color": "#e17055",
-        "personality": "The Rebel",
-        "strategy": "Bets against the crowd",
-        "strengths": ["Catches reversals", "Unique edge"],
-        "weaknesses": ["Often wrong", "Lonely trades"],
-    },
-}
-
-# ============================================================================
-# CUSTOM CSS - Gamified, engaging design
+# COMMAND CENTER CSS - Sharp, dense, professional
 # ============================================================================
 st.markdown("""
 <style>
-    /* Hide Streamlit defaults */
+    /* Reset and base */
     #MainMenu, footer, header {visibility: hidden;}
-    .block-container {padding: 0.5rem 1rem !important; max-width: 100% !important;}
+    .block-container {padding: 0.5rem 0.8rem !important; max-width: 100% !important;}
 
-    /* Dark gaming theme */
-    .stApp { background: linear-gradient(135deg, #0a0e14 0%, #1a1a2e 100%); }
-
-    /* Glowing header */
-    .arena-header {
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-        padding: 15px 25px;
-        border-radius: 12px;
-        margin-bottom: 20px;
-        box-shadow: 0 4px 20px rgba(102, 126, 234, 0.3);
-    }
-    .arena-title {
-        font-size: 28px;
-        font-weight: 800;
-        color: white;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+    /* Dark command center theme */
+    .stApp {
+        background: #0a0a0f;
+        color: #e0e0e0;
     }
 
-    /* Bot card - gamified */
-    .bot-card {
-        background: linear-gradient(145deg, #1e1e30 0%, #16213e 100%);
-        border-radius: 16px;
-        padding: 16px;
+    /* Monospace for data */
+    * {
+        font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+    }
+
+    /* Top bar */
+    .top-bar {
+        background: linear-gradient(180deg, #12121a 0%, #0d0d12 100%);
+        border: 1px solid #1e1e2e;
+        border-radius: 2px;
+        padding: 12px 20px;
         margin-bottom: 12px;
-        border: 2px solid transparent;
-        transition: all 0.3s ease;
-        position: relative;
-        overflow: hidden;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
     }
-    .bot-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 25px rgba(0,0,0,0.3);
+    .system-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: #00ff88;
+        letter-spacing: 2px;
+        text-transform: uppercase;
     }
-    .bot-card.rank-1 {
-        border-color: #ffd700;
-        box-shadow: 0 0 20px rgba(255, 215, 0, 0.3);
+    .system-status {
+        display: flex;
+        gap: 30px;
+        align-items: center;
     }
-    .bot-card.rank-2 {
-        border-color: #c0c0c0;
+    .stat-block {
+        text-align: right;
     }
-    .bot-card.rank-3 {
-        border-color: #cd7f32;
-    }
-
-    /* Bot avatar */
-    .bot-avatar {
-        font-size: 40px;
-        margin-right: 12px;
-    }
-    .bot-name {
+    .stat-value {
         font-size: 18px;
         font-weight: 700;
         color: #fff;
+        font-variant-numeric: tabular-nums;
     }
-    .bot-personality {
-        font-size: 11px;
-        color: #8b95a5;
+    .stat-value.positive { color: #00ff88; }
+    .stat-value.negative { color: #ff4757; }
+    .stat-label {
+        font-size: 9px;
+        color: #666;
         text-transform: uppercase;
         letter-spacing: 1px;
     }
-
-    /* Stats badges */
-    .stat-badge {
-        display: inline-block;
-        padding: 4px 10px;
-        border-radius: 20px;
-        font-size: 12px;
-        font-weight: 600;
-        margin-right: 6px;
-    }
-    .stat-pnl-positive {
-        background: linear-gradient(90deg, #00b894 0%, #00cec9 100%);
-        color: white;
-    }
-    .stat-pnl-negative {
-        background: linear-gradient(90deg, #d63031 0%, #e17055 100%);
-        color: white;
-    }
-    .stat-wins {
-        background: rgba(0, 184, 148, 0.2);
-        color: #00b894;
-        border: 1px solid #00b894;
-    }
-    .stat-streak {
-        background: rgba(253, 203, 110, 0.2);
-        color: #fdcb6e;
-        border: 1px solid #fdcb6e;
-    }
-
-    /* Rank badge */
-    .rank-badge {
-        position: absolute;
-        top: -5px;
-        right: -5px;
-        width: 35px;
-        height: 35px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-weight: 800;
-        font-size: 14px;
-        color: #0a0e14;
-    }
-    .rank-1-badge { background: linear-gradient(135deg, #ffd700 0%, #ffed4a 100%); }
-    .rank-2-badge { background: linear-gradient(135deg, #c0c0c0 0%, #e8e8e8 100%); }
-    .rank-3-badge { background: linear-gradient(135deg, #cd7f32 0%, #daa06d 100%); }
-    .rank-other-badge { background: #3d3d5c; color: #8b95a5; }
-
-    /* Strategy card */
-    .strategy-card {
-        background: #1e1e30;
-        border-radius: 12px;
-        padding: 14px;
-        margin-bottom: 10px;
-        border-left: 4px solid;
-    }
-    .strategy-title {
-        font-size: 13px;
-        font-weight: 600;
+    .live-badge {
+        background: #ff4757;
         color: #fff;
-        margin-bottom: 6px;
+        padding: 3px 8px;
+        border-radius: 2px;
+        font-size: 9px;
+        font-weight: 700;
+        animation: blink 1.5s infinite;
     }
-    .strategy-desc {
-        font-size: 11px;
-        color: #8b95a5;
-        line-height: 1.4;
+    @keyframes blink {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
     }
 
-    /* Market card */
-    .market-card {
-        background: #1e1e30;
-        border-radius: 10px;
-        padding: 12px;
+    /* Panel styling */
+    .panel {
+        background: #0d0d12;
+        border: 1px solid #1a1a24;
+        border-radius: 2px;
         margin-bottom: 8px;
     }
-    .market-question {
-        color: #e0e0e0;
-        font-size: 12px;
-        margin-bottom: 8px;
-        line-height: 1.3;
+    .panel-header {
+        background: #12121a;
+        padding: 8px 12px;
+        border-bottom: 1px solid #1a1a24;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .panel-title {
+        font-size: 10px;
+        font-weight: 600;
+        color: #888;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+    .panel-badge {
+        font-size: 9px;
+        color: #00ff88;
+        background: rgba(0,255,136,0.1);
+        padding: 2px 6px;
+        border-radius: 2px;
+    }
+    .panel-content {
+        padding: 8px;
+    }
+
+    /* Data table */
+    .data-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 11px;
+    }
+    .data-table th {
+        text-align: left;
+        padding: 6px 8px;
+        color: #555;
+        font-weight: 500;
+        text-transform: uppercase;
+        font-size: 9px;
+        letter-spacing: 0.5px;
+        border-bottom: 1px solid #1a1a24;
+    }
+    .data-table td {
+        padding: 6px 8px;
+        border-bottom: 1px solid #111118;
+        color: #ccc;
+        font-variant-numeric: tabular-nums;
+    }
+    .data-table tr:hover {
+        background: #111118;
+    }
+    .rank-1 { color: #ffd700 !important; font-weight: 700; }
+    .rank-2 { color: #c0c0c0 !important; }
+    .rank-3 { color: #cd7f32 !important; }
+    .positive { color: #00ff88 !important; }
+    .negative { color: #ff4757 !important; }
+    .neutral { color: #888 !important; }
+    .hot { color: #ff9f43 !important; }
+
+    /* Mini bar chart in table */
+    .mini-bar {
+        display: inline-block;
+        height: 4px;
+        background: #1a1a24;
+        border-radius: 1px;
+        width: 60px;
+        position: relative;
+    }
+    .mini-bar-fill {
+        position: absolute;
+        left: 0;
+        top: 0;
+        height: 100%;
+        border-radius: 1px;
+    }
+    .mini-bar-fill.win { background: #00ff88; }
+    .mini-bar-fill.loss { background: #ff4757; }
+
+    /* Market row */
+    .market-row {
+        padding: 6px 8px;
+        border-bottom: 1px solid #111118;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 11px;
+    }
+    .market-row:hover {
+        background: #111118;
+    }
+    .market-q {
+        color: #ccc;
+        flex: 1;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        margin-right: 12px;
     }
     .market-prices {
         display: flex;
-        gap: 8px;
+        gap: 6px;
+        align-items: center;
+    }
+    .price-tag {
+        padding: 2px 6px;
+        border-radius: 2px;
+        font-size: 10px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
     }
     .price-yes {
-        background: linear-gradient(90deg, #00b894 0%, #00cec9 100%);
-        color: white;
-        padding: 6px 14px;
-        border-radius: 20px;
-        font-weight: 700;
-        font-size: 13px;
+        background: rgba(0,255,136,0.15);
+        color: #00ff88;
+        border: 1px solid rgba(0,255,136,0.3);
     }
     .price-no {
-        background: linear-gradient(90deg, #d63031 0%, #e17055 100%);
-        color: white;
-        padding: 6px 14px;
-        border-radius: 20px;
-        font-weight: 700;
-        font-size: 13px;
+        background: rgba(255,71,87,0.15);
+        color: #ff4757;
+        border: 1px solid rgba(255,71,87,0.3);
+    }
+    .market-vol {
+        color: #555;
+        font-size: 9px;
+        width: 60px;
+        text-align: right;
     }
 
     /* News item */
-    .news-item {
-        background: #1e1e30;
-        border-radius: 8px;
-        padding: 10px 12px;
-        margin-bottom: 6px;
-        border-left: 3px solid #667eea;
+    .news-row {
+        padding: 5px 8px;
+        border-bottom: 1px solid #111118;
+        font-size: 10px;
     }
-    .news-breaking {
-        border-left-color: #ff6b6b;
-        animation: pulse-border 2s infinite;
-    }
-    @keyframes pulse-border {
-        0%, 100% { border-left-color: #ff6b6b; }
-        50% { border-left-color: #ff8e8e; }
+    .news-row:hover {
+        background: #111118;
     }
     .news-title {
-        color: #e0e0e0;
-        font-size: 12px;
+        color: #bbb;
         line-height: 1.3;
+        margin-bottom: 2px;
     }
     .news-meta {
-        color: #6c7a89;
-        font-size: 10px;
-        margin-top: 4px;
-    }
-
-    /* Section headers */
-    .section-header {
+        color: #444;
+        font-size: 9px;
         display: flex;
-        align-items: center;
-        gap: 10px;
-        margin-bottom: 15px;
-        padding-bottom: 10px;
-        border-bottom: 2px solid #2d2d44;
+        gap: 8px;
     }
-    .section-icon {
-        font-size: 24px;
-    }
-    .section-title {
-        font-size: 16px;
-        font-weight: 700;
-        color: #fff;
+    .news-source {
+        color: #666;
         text-transform: uppercase;
-        letter-spacing: 1px;
     }
-
-    /* Live indicator */
-    .live-indicator {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        background: rgba(255, 107, 107, 0.2);
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-size: 11px;
-        color: #ff6b6b;
+    .news-time {
+        color: #555;
+    }
+    .news-breaking {
+        color: #ff4757;
         font-weight: 600;
     }
-    .live-dot {
-        width: 8px;
-        height: 8px;
-        background: #ff6b6b;
-        border-radius: 50%;
-        animation: pulse 1.5s infinite;
-    }
-    @keyframes pulse {
-        0%, 100% { opacity: 1; transform: scale(1); }
-        50% { opacity: 0.5; transform: scale(1.2); }
-    }
-
-    /* Progress bars */
-    .progress-container {
-        background: #2d2d44;
-        border-radius: 10px;
-        height: 8px;
-        overflow: hidden;
-        margin: 8px 0;
-    }
-    .progress-fill {
-        height: 100%;
-        border-radius: 10px;
-        transition: width 0.5s ease;
-    }
+    .news-sentiment-up { color: #00ff88; }
+    .news-sentiment-down { color: #ff4757; }
 
     /* Compact buttons */
     .stButton > button {
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%) !important;
-        color: white !important;
-        border: none !important;
-        border-radius: 25px !important;
-        padding: 10px 25px !important;
-        font-weight: 600 !important;
-        transition: all 0.3s ease !important;
+        background: #1a1a24 !important;
+        color: #888 !important;
+        border: 1px solid #2a2a3a !important;
+        border-radius: 2px !important;
+        padding: 8px 16px !important;
+        font-size: 10px !important;
+        font-weight: 500 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 1px !important;
+        transition: all 0.2s !important;
     }
     .stButton > button:hover {
-        transform: translateY(-2px) !important;
-        box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4) !important;
+        background: #2a2a3a !important;
+        color: #fff !important;
+        border-color: #3a3a4a !important;
     }
 
-    /* Metric cards */
-    .metric-card {
-        background: linear-gradient(145deg, #1e1e30 0%, #16213e 100%);
-        border-radius: 12px;
-        padding: 15px;
+    /* Checkbox */
+    .stCheckbox label {
+        font-size: 10px !important;
+        color: #666 !important;
+    }
+
+    /* Metrics mini cards */
+    .metric-mini {
+        background: #0d0d12;
+        border: 1px solid #1a1a24;
+        border-radius: 2px;
+        padding: 10px 12px;
         text-align: center;
     }
-    .metric-value {
-        font-size: 28px;
-        font-weight: 800;
+    .metric-mini-value {
+        font-size: 20px;
+        font-weight: 700;
         color: #fff;
+        font-variant-numeric: tabular-nums;
     }
-    .metric-label {
-        font-size: 11px;
-        color: #8b95a5;
+    .metric-mini-label {
+        font-size: 8px;
+        color: #555;
         text-transform: uppercase;
         letter-spacing: 1px;
-        margin-top: 5px;
+        margin-top: 4px;
     }
-    .metric-positive { color: #00b894; }
-    .metric-negative { color: #d63031; }
+
+    /* Strategy compact */
+    .strat-row {
+        padding: 6px 8px;
+        border-bottom: 1px solid #111118;
+        font-size: 10px;
+    }
+    .strat-name {
+        color: #ccc;
+        font-weight: 500;
+        margin-bottom: 2px;
+    }
+    .strat-desc {
+        color: #555;
+        font-size: 9px;
+    }
+    .strat-tags {
+        margin-top: 3px;
+    }
+    .strat-tag {
+        display: inline-block;
+        background: rgba(0,255,136,0.1);
+        color: #00ff88;
+        padding: 1px 4px;
+        border-radius: 2px;
+        font-size: 8px;
+        margin-right: 4px;
+    }
+
+    /* Activity indicator */
+    .activity-dot {
+        display: inline-block;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        margin-right: 6px;
+    }
+    .activity-active { background: #00ff88; }
+    .activity-idle { background: #555; }
+    .activity-warning { background: #ff9f43; }
+
+    /* Scrollable panel */
+    .scroll-panel {
+        max-height: 280px;
+        overflow-y: auto;
+    }
+    .scroll-panel::-webkit-scrollbar {
+        width: 4px;
+    }
+    .scroll-panel::-webkit-scrollbar-track {
+        background: #0d0d12;
+    }
+    .scroll-panel::-webkit-scrollbar-thumb {
+        background: #2a2a3a;
+        border-radius: 2px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -417,7 +399,7 @@ def fetch_live_markets():
     try:
         resp = requests.get(
             "https://gamma-api.polymarket.com/markets",
-            params={"closed": "false", "limit": 20},
+            params={"closed": "false", "limit": 25},
             timeout=10
         )
         if resp.status_code == 200:
@@ -438,7 +420,6 @@ def fetch_live_markets():
                     "yes_price": yes_price,
                     "volume": float(m.get("volume", 0) or 0),
                     "volume_24h": float(m.get("volume24hr", 0) or 0),
-                    "category": m.get("category", ""),
                 })
             return sorted(markets, key=lambda x: x['volume_24h'], reverse=True)
     except:
@@ -452,7 +433,7 @@ def fetch_news():
     try:
         detector = FastNewsSignalDetector()
         data = detector.fetch_data()
-        return data.get("items", [])[:15]
+        return data.get("items", [])[:20]
     except:
         return []
 
@@ -461,295 +442,415 @@ def fetch_news():
 # UI COMPONENTS
 # ============================================================================
 
-def render_header():
-    """Render arena header with key stats."""
+def render_top_bar():
+    """Render command center top bar."""
     tournament = get_tournament()
 
     total_capital = sum(b.current_capital for b in tournament.bots.values())
-    initial = 7000  # 7 bots * 1000 each
+    initial = len(tournament.bots) * 1000
     total_pnl = total_capital - initial
     total_bets = sum(b.total_bets for b in tournament.bots.values())
+    wins = sum(b.winning_bets for b in tournament.bots.values())
+    win_rate = (wins / total_bets * 100) if total_bets > 0 else 0
     active_bots = len([b for b in tournament.bots.values() if b.status != BotStatus.ELIMINATED])
+    open_positions = sum(len(b.open_bets) for b in tournament.bots.values())
 
-    st.markdown(f"""
-    <div class="arena-header">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div>
-                <div class="arena-title">🏆 Bot Arena</div>
-                <div style="color: rgba(255,255,255,0.8); font-size: 13px;">Watch your bots compete for profit</div>
+    pnl_class = "positive" if total_pnl >= 0 else "negative"
+
+    st.html(f"""
+    <div class="top-bar">
+        <div>
+            <div class="system-title">◉ PREDICTION COMMAND CENTER</div>
+        </div>
+        <div class="system-status">
+            <div class="stat-block">
+                <div class="stat-value">${total_capital:,.0f}</div>
+                <div class="stat-label">Capital</div>
             </div>
-            <div style="display: flex; gap: 30px; align-items: center;">
-                <div style="text-align: center;">
-                    <div style="font-size: 24px; font-weight: 800; color: white;">${total_capital:,.0f}</div>
-                    <div style="font-size: 10px; color: rgba(255,255,255,0.7); text-transform: uppercase;">Total Capital</div>
-                </div>
-                <div style="text-align: center;">
-                    <div style="font-size: 24px; font-weight: 800; color: {'#00ffa3' if total_pnl >= 0 else '#ff6b6b'};">${total_pnl:+,.0f}</div>
-                    <div style="font-size: 10px; color: rgba(255,255,255,0.7); text-transform: uppercase;">Total P&L</div>
-                </div>
-                <div style="text-align: center;">
-                    <div style="font-size: 24px; font-weight: 800; color: white;">{total_bets}</div>
-                    <div style="font-size: 10px; color: rgba(255,255,255,0.7); text-transform: uppercase;">Total Bets</div>
-                </div>
-                <div style="text-align: center;">
-                    <div style="font-size: 24px; font-weight: 800; color: white;">{active_bots}/7</div>
-                    <div style="font-size: 10px; color: rgba(255,255,255,0.7); text-transform: uppercase;">Bots Active</div>
-                </div>
-                <div class="live-indicator">
-                    <span class="live-dot"></span>
-                    LIVE
-                </div>
+            <div class="stat-block">
+                <div class="stat-value {pnl_class}">{'+' if total_pnl >= 0 else ''}{total_pnl:,.0f}</div>
+                <div class="stat-label">P&L</div>
             </div>
+            <div class="stat-block">
+                <div class="stat-value">{win_rate:.1f}%</div>
+                <div class="stat-label">Win Rate</div>
+            </div>
+            <div class="stat-block">
+                <div class="stat-value">{total_bets}</div>
+                <div class="stat-label">Bets</div>
+            </div>
+            <div class="stat-block">
+                <div class="stat-value">{open_positions}</div>
+                <div class="stat-label">Open</div>
+            </div>
+            <div class="stat-block">
+                <div class="stat-value">{active_bots}/{len(tournament.bots)}</div>
+                <div class="stat-label">Bots</div>
+            </div>
+            <div class="live-badge">● LIVE</div>
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    """)
 
 
-def render_bot_leaderboard():
-    """Render gamified bot leaderboard."""
+def render_bot_table():
+    """Render compact bot performance table."""
     tournament = get_tournament()
     rankings = tournament.get_rankings()
 
-    st.markdown("""
-    <div class="section-header">
-        <span class="section-icon">🏅</span>
-        <span class="section-title">Leaderboard</span>
-    </div>
-    """, unsafe_allow_html=True)
-
-    for i, bot in enumerate(rankings[:7]):
-        name = bot['name']
-        profile = BOT_PROFILES.get(name, {"emoji": "🤖", "color": "#667eea", "personality": "Bot"})
-
+    rows = ""
+    for i, bot in enumerate(rankings):
         rank = i + 1
         rank_class = f"rank-{rank}" if rank <= 3 else ""
-        rank_badge_class = f"rank-{rank}-badge" if rank <= 3 else "rank-other-badge"
 
+        name = bot['name']
         pnl = bot['total_pnl']
-        pnl_class = "stat-pnl-positive" if pnl >= 0 else "stat-pnl-negative"
+        pnl_class = "positive" if pnl >= 0 else "negative"
 
         wins = bot.get('winning_bets', 0)
         total = bot.get('total_bets', 0)
         losses = total - wins
-        win_rate = (wins / total * 100) if total > 0 else 0
+        wr = (wins / total * 100) if total > 0 else 0
 
-        # Calculate streak (simplified)
-        streak = "🔥" if wins > losses and total > 5 else ""
-
-        # Day progress
+        capital = bot.get('current_capital', 1000)
+        open_count = bot.get('open_bets_count', 0)
         days = bot.get('days_evaluated', 0)
-        day_pct = (days / 3) * 100
 
-        st.markdown(f"""
-        <div class="bot-card {rank_class}">
-            <div class="rank-badge {rank_badge_class}">#{rank}</div>
-            <div style="display: flex; align-items: center;">
-                <span class="bot-avatar">{profile['emoji']}</span>
-                <div style="flex: 1;">
-                    <div class="bot-name">{name}</div>
-                    <div class="bot-personality">{profile['personality']}</div>
-                </div>
-                <div style="text-align: right;">
-                    <span class="stat-badge {pnl_class}">${pnl:+,.0f}</span>
-                    <span class="stat-badge stat-wins">{wins}W / {losses}L</span>
-                    {f'<span class="stat-badge stat-streak">{streak} Hot</span>' if streak else ''}
-                </div>
-            </div>
-            <div style="margin-top: 10px;">
-                <div style="display: flex; justify-content: space-between; font-size: 10px; color: #8b95a5;">
-                    <span>Evaluation Progress</span>
-                    <span>Day {days}/3</span>
-                </div>
-                <div class="progress-container">
-                    <div class="progress-fill" style="width: {day_pct}%; background: linear-gradient(90deg, {profile['color']} 0%, {profile['color']}aa 100%);"></div>
-                </div>
-            </div>
+        # Win rate bar
+        bar_width = min(wr, 100)
+        bar_class = "win" if wr >= 50 else "loss"
+
+        # Activity indicator
+        activity = "active" if open_count > 0 else "idle"
+
+        # Hot indicator
+        hot = "🔥" if wr > 60 and total >= 5 else ""
+
+        rows += f"""
+        <tr>
+            <td class="{rank_class}">#{rank}</td>
+            <td><span class="activity-dot activity-{activity}"></span>{name[:15]}</td>
+            <td class="{pnl_class}">{'+' if pnl >= 0 else ''}{pnl:.0f}</td>
+            <td>${capital:,.0f}</td>
+            <td>{wins}/{losses}</td>
+            <td>
+                <span class="mini-bar"><span class="mini-bar-fill {bar_class}" style="width:{bar_width}%"></span></span>
+                {wr:.0f}%
+            </td>
+            <td>{open_count}</td>
+            <td>D{days}/3</td>
+            <td class="hot">{hot}</td>
+        </tr>
+        """
+
+    st.html(f"""
+    <div class="panel">
+        <div class="panel-header">
+            <span class="panel-title">Bot Performance</span>
+            <span class="panel-badge">{len(rankings)} active</span>
         </div>
-        """, unsafe_allow_html=True)
-
-
-def render_strategy_cards():
-    """Render strategy explanation cards."""
-    tournament = get_tournament()
-    rankings = tournament.get_rankings()
-
-    st.markdown("""
-    <div class="section-header">
-        <span class="section-icon">🧠</span>
-        <span class="section-title">Strategies</span>
+        <div class="panel-content">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Bot</th>
+                        <th>P&L</th>
+                        <th>Capital</th>
+                        <th>W/L</th>
+                        <th>Win%</th>
+                        <th>Open</th>
+                        <th>Day</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows}
+                </tbody>
+            </table>
+        </div>
     </div>
-    """, unsafe_allow_html=True)
-
-    for bot in rankings[:4]:
-        name = bot['name']
-        profile = BOT_PROFILES.get(name, {"emoji": "🤖", "color": "#667eea", "strategy": "Trading bot", "strengths": [], "weaknesses": []})
-
-        strengths = ", ".join(profile.get('strengths', [])[:2])
-
-        st.markdown(f"""
-        <div class="strategy-card" style="border-color: {profile['color']};">
-            <div class="strategy-title">{profile['emoji']} {name}</div>
-            <div class="strategy-desc">{profile.get('strategy', 'Automated trading')}</div>
-            <div style="margin-top: 8px; font-size: 10px;">
-                <span style="color: #00b894;">✓ {strengths}</span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+    """)
 
 
-def render_live_markets():
+def render_markets():
     """Render live markets panel."""
     markets = fetch_live_markets()
 
-    st.markdown("""
-    <div class="section-header">
-        <span class="section-icon">📈</span>
-        <span class="section-title">Hot Markets</span>
-    </div>
-    """, unsafe_allow_html=True)
+    rows = ""
+    for m in markets[:12]:
+        yes = int(m['yes_price'] * 100)
+        no = 100 - yes
+        vol = m['volume_24h']
 
-    for m in markets[:8]:
-        yes_pct = int(m['yes_price'] * 100)
-        no_pct = 100 - yes_pct
-        vol_k = m['volume_24h'] / 1000
+        if vol >= 1000000:
+            vol_str = f"${vol/1000000:.1f}M"
+        elif vol >= 1000:
+            vol_str = f"${vol/1000:.0f}K"
+        else:
+            vol_str = f"${vol:.0f}"
 
-        question = m['question'][:60] + ('...' if len(m['question']) > 60 else '')
+        q = m['question'][:50] + ('...' if len(m['question']) > 50 else '')
 
-        st.markdown(f"""
-        <div class="market-card">
-            <div class="market-question">{question}</div>
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div class="market-prices">
-                    <span class="price-yes">Yes {yes_pct}¢</span>
-                    <span class="price-no">No {no_pct}¢</span>
-                </div>
-                <span style="color: #6c7a89; font-size: 11px;">${vol_k:.0f}K 24h</span>
+        rows += f"""
+        <div class="market-row">
+            <span class="market-q">{q}</span>
+            <div class="market-prices">
+                <span class="price-tag price-yes">{yes}¢</span>
+                <span class="price-tag price-no">{no}¢</span>
             </div>
+            <span class="market-vol">{vol_str}</span>
         </div>
-        """, unsafe_allow_html=True)
+        """
+
+    st.html(f"""
+    <div class="panel">
+        <div class="panel-header">
+            <span class="panel-title">Live Markets</span>
+            <span class="panel-badge">{len(markets)} active</span>
+        </div>
+        <div class="scroll-panel">
+            {rows}
+        </div>
+    </div>
+    """)
 
 
-def render_news_feed():
-    """Render news feed."""
+def render_news():
+    """Render news feed panel."""
     news = fetch_news()
 
-    st.markdown("""
-    <div class="section-header">
-        <span class="section-icon">📰</span>
-        <span class="section-title">News Feed</span>
-    </div>
-    """, unsafe_allow_html=True)
-
-    for item in news[:8]:
+    rows = ""
+    for item in news[:12]:
         age_min = int(item.age_seconds / 60)
         is_breaking = item.freshness_score > 0.8
 
-        title = item.title[:70] + ('...' if len(item.title) > 70 else '')
-        source = item.source.split(':')[-1][:10].upper()
+        title = item.title[:65] + ('...' if len(item.title) > 65 else '')
+        source = item.source.split(':')[-1][:8].upper()
 
-        # Sentiment indicator
-        sent = "📈" if item.sentiment_hint > 0.2 else "📉" if item.sentiment_hint < -0.2 else ""
+        # Sentiment
+        if item.sentiment_hint > 0.2:
+            sent_class = "news-sentiment-up"
+            sent_icon = "▲"
+        elif item.sentiment_hint < -0.2:
+            sent_class = "news-sentiment-down"
+            sent_icon = "▼"
+        else:
+            sent_class = ""
+            sent_icon = ""
 
-        st.markdown(f"""
-        <div class="news-item {'news-breaking' if is_breaking else ''}">
-            <div class="news-title">{sent} {title}</div>
-            <div class="news-meta">{source} • {age_min}m ago {'🔴 BREAKING' if is_breaking else ''}</div>
+        breaking = '<span class="news-breaking">BREAKING</span>' if is_breaking else ""
+
+        rows += f"""
+        <div class="news-row">
+            <div class="news-title"><span class="{sent_class}">{sent_icon}</span> {title}</div>
+            <div class="news-meta">
+                <span class="news-source">{source}</span>
+                <span class="news-time">{age_min}m</span>
+                {breaking}
+            </div>
         </div>
-        """, unsafe_allow_html=True)
+        """
+
+    st.html(f"""
+    <div class="panel">
+        <div class="panel-header">
+            <span class="panel-title">News Feed</span>
+            <span class="panel-badge">{len(news)} items</span>
+        </div>
+        <div class="scroll-panel">
+            {rows}
+        </div>
+    </div>
+    """)
+
+
+def render_positions():
+    """Render open positions panel."""
+    tournament = get_tournament()
+    all_open = []
+
+    for bot in tournament.bots.values():
+        for bet in bot.open_bets:
+            all_open.append({
+                'bot': bot.name[:10],
+                'market': bet.market_question[:35],
+                'side': bet.side.upper(),
+                'amount': bet.amount,
+                'entry': bet.entry_price,
+                'placed': bet.placed_at,
+            })
+
+    # Sort by placed time
+    all_open.sort(key=lambda x: x['placed'], reverse=True)
+
+    rows = ""
+    for pos in all_open[:10]:
+        side_class = "positive" if pos['side'] == 'YES' else "negative"
+        age = (datetime.now() - pos['placed']).total_seconds() / 60
+
+        rows += f"""
+        <div class="market-row">
+            <span style="width:70px;color:#666;">{pos['bot']}</span>
+            <span class="market-q">{pos['market']}...</span>
+            <span class="{side_class}" style="width:35px;">{pos['side']}</span>
+            <span style="width:50px;text-align:right;">${pos['amount']:.0f}</span>
+            <span style="width:40px;text-align:right;color:#666;">{pos['entry']*100:.0f}¢</span>
+            <span style="width:40px;text-align:right;color:#444;">{age:.0f}m</span>
+        </div>
+        """
+
+    if not rows:
+        rows = '<div style="padding:20px;color:#444;text-align:center;">No open positions</div>'
+
+    st.html(f"""
+    <div class="panel">
+        <div class="panel-header">
+            <span class="panel-title">Open Positions</span>
+            <span class="panel-badge">{len(all_open)} positions</span>
+        </div>
+        <div class="scroll-panel">
+            {rows}
+        </div>
+    </div>
+    """)
+
+
+def render_recent_bets():
+    """Render recent bets panel."""
+    tournament = get_tournament()
+    recent = tournament.all_bets[-15:]
+    recent.reverse()
+
+    rows = ""
+    for bet in recent:
+        if bet.status == 'won':
+            status = '<span class="positive">WIN</span>'
+            pnl_str = f'<span class="positive">+{bet.pnl:.0f}</span>' if bet.pnl else ''
+        elif bet.status == 'lost':
+            status = '<span class="negative">LOSS</span>'
+            pnl_str = f'<span class="negative">{bet.pnl:.0f}</span>' if bet.pnl else ''
+        else:
+            status = '<span class="neutral">OPEN</span>'
+            pnl_str = ''
+
+        side_class = "positive" if bet.side == 'yes' else "negative"
+        market = bet.market_question[:30] + '...' if len(bet.market_question) > 30 else bet.market_question
+
+        rows += f"""
+        <div class="market-row">
+            <span style="width:35px;">{status}</span>
+            <span style="width:70px;color:#666;">{bet.bot_id[:10]}</span>
+            <span class="market-q">{market}</span>
+            <span class="{side_class}" style="width:30px;">{bet.side.upper()[:1]}</span>
+            <span style="width:45px;text-align:right;">${bet.amount:.0f}</span>
+            <span style="width:45px;text-align:right;">{pnl_str}</span>
+        </div>
+        """
+
+    if not rows:
+        rows = '<div style="padding:20px;color:#444;text-align:center;">No bets yet</div>'
+
+    st.html(f"""
+    <div class="panel">
+        <div class="panel-header">
+            <span class="panel-title">Recent Activity</span>
+            <span class="panel-badge">{len(tournament.all_bets)} total</span>
+        </div>
+        <div class="scroll-panel">
+            {rows}
+        </div>
+    </div>
+    """)
 
 
 def render_performance_chart():
-    """Render bot performance comparison chart."""
+    """Render P&L chart."""
     tournament = get_tournament()
     rankings = tournament.get_rankings()
 
     if not rankings:
         return
 
-    names = [r['name'][:10] for r in rankings]
+    names = [r['name'][:12] for r in rankings]
     pnls = [r['total_pnl'] for r in rankings]
-    colors = [BOT_PROFILES.get(r['name'], {}).get('color', '#667eea') for r in rankings]
+    colors = ['#00ff88' if p >= 0 else '#ff4757' for p in pnls]
 
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=names,
         y=pnls,
         marker_color=colors,
-        text=[f"${p:+,.0f}" for p in pnls],
+        text=[f"{p:+.0f}" for p in pnls],
         textposition='outside',
-        textfont=dict(size=11, color='white'),
+        textfont=dict(size=9, color='#888', family='Monaco'),
     ))
 
+    fig.add_hline(y=0, line_color='#2a2a3a', line_width=1)
+
     fig.update_layout(
-        title=dict(text="💰 Profit & Loss by Bot", font=dict(size=14, color='white')),
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='#8b95a5'),
-        margin=dict(l=40, r=20, t=50, b=40),
-        height=250,
-        xaxis=dict(showgrid=False, tickfont=dict(size=10)),
-        yaxis=dict(showgrid=True, gridcolor='#2d2d44', zeroline=True, zerolinecolor='#3d3d5c', tickformat='$,.0f'),
+        plot_bgcolor='#0d0d12',
+        paper_bgcolor='#0d0d12',
+        font=dict(color='#555', size=9, family='Monaco'),
+        margin=dict(l=40, r=10, t=30, b=50),
+        height=180,
+        xaxis=dict(showgrid=False, tickangle=45),
+        yaxis=dict(showgrid=True, gridcolor='#1a1a24', zeroline=False, tickformat='+'),
         showlegend=False,
+        title=dict(text='P&L BY BOT', font=dict(size=10, color='#555'), x=0.02),
     )
 
     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
 
-def render_win_rate_chart():
-    """Render win rate comparison."""
+def render_winrate_chart():
+    """Render win rate chart."""
     tournament = get_tournament()
-    rankings = tournament.get_rankings()
+    rankings = [r for r in tournament.get_rankings() if r.get('total_bets', 0) > 0]
 
-    if not rankings or all(r.get('total_bets', 0) == 0 for r in rankings):
+    if not rankings:
         return
 
-    # Filter bots with bets
-    active = [r for r in rankings if r.get('total_bets', 0) > 0]
-    if not active:
-        return
-
-    names = [r['name'][:10] for r in active]
-    win_rates = [r.get('win_rate', 0) * 100 for r in active]
-    colors = [BOT_PROFILES.get(r['name'], {}).get('color', '#667eea') for r in active]
+    names = [r['name'][:12] for r in rankings]
+    wrs = [r.get('win_rate', 0) * 100 for r in rankings]
+    colors = ['#00ff88' if w >= 50 else '#ff4757' for w in wrs]
 
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=names,
-        y=win_rates,
+        y=wrs,
         marker_color=colors,
-        text=[f"{wr:.0f}%" for wr in win_rates],
+        text=[f"{w:.0f}%" for w in wrs],
         textposition='outside',
-        textfont=dict(size=11, color='white'),
+        textfont=dict(size=9, color='#888', family='Monaco'),
     ))
 
-    # Add 50% reference line
-    fig.add_hline(y=50, line_dash="dash", line_color="#5a6270", opacity=0.5)
+    fig.add_hline(y=50, line_color='#2a2a3a', line_width=1, line_dash='dot')
 
     fig.update_layout(
-        title=dict(text="🎯 Win Rate by Bot", font=dict(size=14, color='white')),
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='#8b95a5'),
-        margin=dict(l=40, r=20, t=50, b=40),
-        height=250,
-        xaxis=dict(showgrid=False, tickfont=dict(size=10)),
-        yaxis=dict(showgrid=True, gridcolor='#2d2d44', range=[0, 100], ticksuffix='%'),
+        plot_bgcolor='#0d0d12',
+        paper_bgcolor='#0d0d12',
+        font=dict(color='#555', size=9, family='Monaco'),
+        margin=dict(l=40, r=10, t=30, b=50),
+        height=180,
+        xaxis=dict(showgrid=False, tickangle=45),
+        yaxis=dict(showgrid=True, gridcolor='#1a1a24', range=[0, 100]),
         showlegend=False,
+        title=dict(text='WIN RATE', font=dict(size=10, color='#555'), x=0.02),
     )
 
     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
 
 def render_activity_chart():
-    """Render betting activity over time."""
+    """Render activity timeline."""
     tournament = get_tournament()
     all_bets = tournament.all_bets[-50:]
 
     if len(all_bets) < 3:
         return
 
-    # Group by hour
-    hour_data = defaultdict(lambda: {'won': 0, 'lost': 0, 'pending': 0})
+    hour_data = defaultdict(lambda: {'won': 0, 'lost': 0, 'open': 0})
     for bet in all_bets:
         hour = bet.placed_at.strftime('%H:00')
         if bet.status == 'won':
@@ -757,299 +858,69 @@ def render_activity_chart():
         elif bet.status == 'lost':
             hour_data[hour]['lost'] += 1
         else:
-            hour_data[hour]['pending'] += 1
+            hour_data[hour]['open'] += 1
 
     hours = sorted(hour_data.keys())
 
     fig = go.Figure()
-    fig.add_trace(go.Bar(name='Won', x=hours, y=[hour_data[h]['won'] for h in hours], marker_color='#00b894'))
-    fig.add_trace(go.Bar(name='Lost', x=hours, y=[hour_data[h]['lost'] for h in hours], marker_color='#d63031'))
-    fig.add_trace(go.Bar(name='Pending', x=hours, y=[hour_data[h]['pending'] for h in hours], marker_color='#fdcb6e'))
+    fig.add_trace(go.Bar(name='Won', x=hours, y=[hour_data[h]['won'] for h in hours], marker_color='#00ff88'))
+    fig.add_trace(go.Bar(name='Lost', x=hours, y=[hour_data[h]['lost'] for h in hours], marker_color='#ff4757'))
+    fig.add_trace(go.Bar(name='Open', x=hours, y=[hour_data[h]['open'] for h in hours], marker_color='#ff9f43'))
 
     fig.update_layout(
-        title=dict(text="⏰ Activity by Hour", font=dict(size=14, color='white')),
         barmode='stack',
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='#8b95a5'),
-        margin=dict(l=40, r=20, t=50, b=40),
-        height=200,
-        xaxis=dict(showgrid=False, tickfont=dict(size=10)),
-        yaxis=dict(showgrid=True, gridcolor='#2d2d44'),
-        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1, font=dict(size=10)),
+        plot_bgcolor='#0d0d12',
+        paper_bgcolor='#0d0d12',
+        font=dict(color='#555', size=9, family='Monaco'),
+        margin=dict(l=40, r=10, t=30, b=40),
+        height=180,
+        xaxis=dict(showgrid=False),
+        yaxis=dict(showgrid=True, gridcolor='#1a1a24'),
+        legend=dict(orientation='h', yanchor='top', y=1.15, xanchor='right', x=1, font=dict(size=8)),
+        title=dict(text='ACTIVITY', font=dict(size=10, color='#555'), x=0.02),
     )
 
     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
 
 def render_market_sentiment():
-    """Render market sentiment trend chart."""
+    """Render market sentiment gauge."""
     markets = fetch_live_markets()
 
     if not markets:
         return
 
-    # Calculate market sentiment distribution
     bullish = sum(1 for m in markets if m['yes_price'] > 0.6)
     neutral = sum(1 for m in markets if 0.4 <= m['yes_price'] <= 0.6)
     bearish = sum(1 for m in markets if m['yes_price'] < 0.4)
 
-    fig = go.Figure()
-    fig.add_trace(go.Pie(
-        labels=['Bullish (>60%)', 'Neutral (40-60%)', 'Bearish (<40%)'],
-        values=[bullish, neutral, bearish],
-        hole=0.6,
-        marker_colors=['#00b894', '#fdcb6e', '#d63031'],
-        textinfo='percent',
-        textfont=dict(size=11, color='white'),
-    ))
-
-    # Add center text showing overall sentiment
     total = len(markets)
-    sentiment_score = (bullish - bearish) / total if total > 0 else 0
-    sentiment_emoji = "📈" if sentiment_score > 0.2 else "📉" if sentiment_score < -0.2 else "➡️"
+    sentiment = (bullish - bearish) / total if total > 0 else 0
 
-    fig.add_annotation(
-        text=f"{sentiment_emoji}<br><b>{abs(sentiment_score)*100:.0f}%</b>",
-        x=0.5, y=0.5, showarrow=False,
-        font=dict(size=16, color='white'),
-    )
-
-    fig.update_layout(
-        title=dict(text="🌡️ Market Sentiment", font=dict(size=14, color='white')),
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='#8b95a5'),
-        margin=dict(l=20, r=20, t=50, b=20),
-        height=200,
-        showlegend=True,
-        legend=dict(orientation='h', yanchor='bottom', y=-0.1, xanchor='center', x=0.5, font=dict(size=9)),
-    )
-
-    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-
-
-def render_system_stats():
-    """Render system improvement tracking."""
-    tournament = get_tournament()
-    all_bets = tournament.all_bets
-
-    if len(all_bets) < 5:
-        st.markdown("""
-        <div class="metric-card">
-            <div class="metric-value">--</div>
-            <div class="metric-label">More data needed</div>
-        </div>
-        """, unsafe_allow_html=True)
-        return
-
-    # Calculate cumulative accuracy over batches of 10 bets
-    batch_size = 10
-    batches = []
-    for i in range(0, len(all_bets), batch_size):
-        batch = all_bets[i:i+batch_size]
-        resolved = [b for b in batch if b.status in ['won', 'lost']]
-        if resolved:
-            wins = sum(1 for b in resolved if b.status == 'won')
-            accuracy = wins / len(resolved) * 100
-            batches.append({'batch': len(batches) + 1, 'accuracy': accuracy})
-
-    if len(batches) < 2:
-        return
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=[b['batch'] for b in batches],
-        y=[b['accuracy'] for b in batches],
-        mode='lines+markers',
-        line=dict(color='#667eea', width=2),
-        marker=dict(size=8, color='#667eea'),
-        fill='tozeroy',
-        fillcolor='rgba(102, 126, 234, 0.1)',
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=sentiment * 100,
+        number={'suffix': '%', 'font': {'size': 24, 'color': '#888', 'family': 'Monaco'}},
+        gauge={
+            'axis': {'range': [-100, 100], 'tickcolor': '#333'},
+            'bar': {'color': '#00ff88' if sentiment > 0 else '#ff4757'},
+            'bgcolor': '#1a1a24',
+            'borderwidth': 0,
+            'steps': [
+                {'range': [-100, -30], 'color': 'rgba(255,71,87,0.2)'},
+                {'range': [-30, 30], 'color': 'rgba(136,136,136,0.1)'},
+                {'range': [30, 100], 'color': 'rgba(0,255,136,0.2)'},
+            ],
+        }
     ))
 
-    # Add trend line
-    if len(batches) >= 3:
-        x_vals = list(range(len(batches)))
-        y_vals = [b['accuracy'] for b in batches]
-        slope = (y_vals[-1] - y_vals[0]) / (len(y_vals) - 1) if len(y_vals) > 1 else 0
-        trend_text = "📈 Improving" if slope > 1 else "📉 Declining" if slope < -1 else "➡️ Stable"
-
-        fig.add_annotation(
-            text=trend_text,
-            x=0.95, y=0.95, xref='paper', yref='paper',
-            showarrow=False,
-            font=dict(size=11, color='white'),
-            bgcolor='rgba(102, 126, 234, 0.5)',
-            borderpad=4,
-        )
-
-    # Add 50% baseline
-    fig.add_hline(y=50, line_dash="dash", line_color="#5a6270", opacity=0.5)
-
     fig.update_layout(
-        title=dict(text="🎯 System Accuracy Trend", font=dict(size=14, color='white')),
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='#8b95a5'),
-        margin=dict(l=40, r=20, t=50, b=40),
-        height=200,
-        xaxis=dict(title='Bet Batch', showgrid=False, tickfont=dict(size=10)),
-        yaxis=dict(title='Accuracy %', showgrid=True, gridcolor='#2d2d44', range=[0, 100]),
-        showlegend=False,
-    )
-
-    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-
-
-def render_achievements():
-    """Render achievements and streaks panel."""
-    tournament = get_tournament()
-    rankings = tournament.get_rankings()
-
-    st.markdown("""
-    <div class="section-header">
-        <span class="section-icon">🏆</span>
-        <span class="section-title">Achievements</span>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Calculate achievements
-    achievements = []
-
-    # Top performer
-    if rankings:
-        top = rankings[0]
-        profile = BOT_PROFILES.get(top['name'], {"emoji": "🤖"})
-        achievements.append({
-            "icon": "👑",
-            "title": "Current Champion",
-            "desc": f"{profile['emoji']} {top['name'][:12]}",
-            "color": "#ffd700"
-        })
-
-    # Best win rate
-    best_wr = max(rankings, key=lambda x: x.get('win_rate', 0)) if rankings else None
-    if best_wr and best_wr.get('total_bets', 0) >= 5:
-        wr = best_wr.get('win_rate', 0) * 100
-        profile = BOT_PROFILES.get(best_wr['name'], {"emoji": "🤖"})
-        achievements.append({
-            "icon": "🎯",
-            "title": f"Sharpshooter ({wr:.0f}%)",
-            "desc": f"{profile['emoji']} {best_wr['name'][:12]}",
-            "color": "#00b894"
-        })
-
-    # Most active
-    most_bets = max(rankings, key=lambda x: x.get('total_bets', 0)) if rankings else None
-    if most_bets and most_bets.get('total_bets', 0) > 0:
-        profile = BOT_PROFILES.get(most_bets['name'], {"emoji": "🤖"})
-        achievements.append({
-            "icon": "⚡",
-            "title": f"Most Active ({most_bets.get('total_bets', 0)} bets)",
-            "desc": f"{profile['emoji']} {most_bets['name'][:12]}",
-            "color": "#ffe66d"
-        })
-
-    # Big winner
-    if rankings:
-        big_winner = max(rankings, key=lambda x: x.get('total_pnl', 0))
-        if big_winner.get('total_pnl', 0) > 50:
-            profile = BOT_PROFILES.get(big_winner['name'], {"emoji": "🤖"})
-            achievements.append({
-                "icon": "💰",
-                "title": f"Big Winner (+${big_winner.get('total_pnl', 0):.0f})",
-                "desc": f"{profile['emoji']} {big_winner['name'][:12]}",
-                "color": "#00b894"
-            })
-
-    # Calculate streaks from recent bets
-    all_bets = tournament.all_bets[-30:]
-    bot_streaks = defaultdict(int)
-    current_streaks = defaultdict(int)
-
-    for bet in reversed(all_bets):
-        bot_name = bet.bot_id  # bot_id stores the bot name
-        if bet.status == 'won':
-            current_streaks[bot_name] += 1
-            bot_streaks[bot_name] = max(bot_streaks[bot_name], current_streaks[bot_name])
-        else:
-            current_streaks[bot_name] = 0
-
-    # Hot streak achievement
-    if bot_streaks:
-        hot_bot = max(bot_streaks.items(), key=lambda x: x[1])
-        if hot_bot[1] >= 3:
-            profile = BOT_PROFILES.get(hot_bot[0], {"emoji": "🤖"})
-            achievements.append({
-                "icon": "🔥",
-                "title": f"Hot Streak ({hot_bot[1]} wins)",
-                "desc": f"{profile['emoji']} {hot_bot[0][:12]}",
-                "color": "#ff6b6b"
-            })
-
-    # Render achievements
-    for ach in achievements[:5]:
-        st.markdown(f"""
-        <div style="
-            background: linear-gradient(145deg, rgba(30,30,48,0.9) 0%, rgba(22,33,62,0.9) 100%);
-            border-radius: 10px;
-            padding: 10px 14px;
-            margin-bottom: 8px;
-            border-left: 3px solid {ach['color']};
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        ">
-            <span style="font-size: 24px;">{ach['icon']}</span>
-            <div>
-                <div style="color: white; font-size: 12px; font-weight: 600;">{ach['title']}</div>
-                <div style="color: #8b95a5; font-size: 11px;">{ach['desc']}</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-
-def render_capital_flow():
-    """Render capital flow chart showing money movement."""
-    tournament = get_tournament()
-    rankings = tournament.get_rankings()
-
-    if not rankings:
-        return
-
-    # Create capital comparison - use data from rankings
-    names = [r['name'][:8] for r in rankings]
-    current = [r.get('current_capital', 1000) for r in rankings]
-    colors = [BOT_PROFILES.get(r['name'], {}).get('color', '#667eea') for r in rankings]
-
-    fig = go.Figure()
-
-    # Current capital bars
-    fig.add_trace(go.Bar(
-        name='Current',
-        x=names,
-        y=current,
-        marker_color=colors,
-        text=[f"${c:,.0f}" for c in current],
-        textposition='outside',
-        textfont=dict(size=10, color='white'),
-    ))
-
-    # Initial capital reference line
-    fig.add_hline(y=1000, line_dash="dash", line_color="#fdcb6e", opacity=0.7,
-                  annotation_text="Start: $1,000", annotation_position="right")
-
-    fig.update_layout(
-        title=dict(text="💵 Capital Status", font=dict(size=14, color='white')),
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='#8b95a5'),
-        margin=dict(l=40, r=20, t=50, b=40),
-        height=200,
-        xaxis=dict(showgrid=False, tickfont=dict(size=9)),
-        yaxis=dict(showgrid=True, gridcolor='#2d2d44', tickformat='$,.0f'),
-        showlegend=False,
+        plot_bgcolor='#0d0d12',
+        paper_bgcolor='#0d0d12',
+        font=dict(color='#555', size=9, family='Monaco'),
+        margin=dict(l=20, r=20, t=40, b=10),
+        height=160,
+        title=dict(text='MARKET SENTIMENT', font=dict(size=10, color='#555'), x=0.5, xanchor='center'),
     )
 
     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
@@ -1062,19 +933,19 @@ def render_controls():
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        if st.button("▶️ Simulate Round", use_container_width=True):
+        if st.button("▶ SIMULATE", use_container_width=True):
             tournament.simulate_round()
             st.cache_data.clear()
             st.rerun()
 
     with col2:
-        if st.button("📊 Daily Evaluation", use_container_width=True):
+        if st.button("◉ EVALUATE", use_container_width=True):
             tournament.run_daily_evaluation()
             st.cache_data.clear()
             st.rerun()
 
     with col3:
-        if st.button("🔄 Refresh Data", use_container_width=True):
+        if st.button("↻ REFRESH", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
 
@@ -1092,58 +963,42 @@ def render_controls():
 def main():
     """Main dashboard layout."""
 
-    # Header
-    render_header()
+    # Top bar
+    render_top_bar()
 
     # Controls
     render_controls()
 
-    st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
-
-    # Main content - 4 columns for more density
+    # Main grid - 4 columns
     col1, col2, col3, col4 = st.columns([1.4, 1.2, 1.2, 1.2])
 
     with col1:
-        render_bot_leaderboard()
+        render_bot_table()
+        render_positions()
 
     with col2:
-        render_live_markets()
+        render_markets()
 
     with col3:
-        render_news_feed()
+        render_news()
 
     with col4:
-        render_strategy_cards()
-        st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
-        render_achievements()
+        render_recent_bets()
 
-    # Charts row 1 - Performance metrics
-    st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
+    # Charts row
+    c1, c2, c3, c4 = st.columns(4)
 
-    chart_col1, chart_col2, chart_col3, chart_col4 = st.columns(4)
-
-    with chart_col1:
+    with c1:
         render_performance_chart()
 
-    with chart_col2:
-        render_win_rate_chart()
+    with c2:
+        render_winrate_chart()
 
-    with chart_col3:
-        render_capital_flow()
-
-    with chart_col4:
-        render_market_sentiment()
-
-    # Charts row 2 - System metrics
-    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
-
-    sys_col1, sys_col2 = st.columns(2)
-
-    with sys_col1:
+    with c3:
         render_activity_chart()
 
-    with sys_col2:
-        render_system_stats()
+    with c4:
+        render_market_sentiment()
 
 
 if __name__ == "__main__":
