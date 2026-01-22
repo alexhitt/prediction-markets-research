@@ -538,7 +538,7 @@ def render_bot_panel():
         </div>
         """
 
-    st.markdown(header_html + rows_html + "</div></div>", unsafe_allow_html=True)
+    st.html(header_html + rows_html + "</div></div>")
 
 
 def render_markets_panel():
@@ -589,7 +589,7 @@ def render_markets_panel():
         """
 
     html += "</div></div>"
-    st.markdown(html, unsafe_allow_html=True)
+    st.html(html)
 
 
 def render_news_panel():
@@ -647,7 +647,7 @@ def render_news_panel():
         """
 
     html += "</div></div>"
-    st.markdown(html, unsafe_allow_html=True)
+    st.html(html)
 
 
 def render_activity_panel():
@@ -702,7 +702,7 @@ def render_activity_panel():
             """
 
     html += "</div></div>"
-    st.markdown(html, unsafe_allow_html=True)
+    st.html(html)
 
 
 def render_positions_panel():
@@ -763,7 +763,7 @@ def render_positions_panel():
             """
 
     html += "</div></div>"
-    st.markdown(html, unsafe_allow_html=True)
+    st.html(html)
 
 
 def render_signals_panel():
@@ -820,7 +820,7 @@ def render_signals_panel():
             """
 
     html += "</div></div>"
-    st.markdown(html, unsafe_allow_html=True)
+    st.html(html)
 
 
 def render_risk_panel():
@@ -874,7 +874,7 @@ def render_risk_panel():
         </div>
     </div>
     """
-    st.markdown(html, unsafe_allow_html=True)
+    st.html(html)
 
 
 def render_controls():
