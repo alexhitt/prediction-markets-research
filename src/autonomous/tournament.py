@@ -20,6 +20,7 @@ Betting Tiers:
 import json
 import random
 import uuid
+import asyncio
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, date, timedelta
 from enum import Enum
@@ -28,6 +29,20 @@ from typing import Any, Dict, List, Optional, Tuple
 from threading import RLock
 
 from loguru import logger
+
+# Import real trading components
+try:
+    from src.market_discovery import MarketScanner, ResolutionTracker
+    from src.research import get_researcher_for_bot, ProbabilityEstimate
+    from src.learning import ResolutionWorker, CalibrationTracker, DomainSpecialist
+    from src.database.models import ResearchEstimate, PendingResolution, BotMemory
+    HAS_REAL_TRADING = True
+except ImportError:
+    HAS_REAL_TRADING = False
+    logger.warning("Real trading modules not available - using simulation only")
+
+# Calendar data directory for daily summaries
+CALENDAR_DATA_DIR = Path(__file__).parent.parent.parent / "data" / "calendar"
 
 
 class BettingTier(Enum):
@@ -327,12 +342,22 @@ class BotTournament:
     def add_default_bots(self):
         """Add default competing bots."""
         default_bots = [
-            ("Aggressive Alpha", "momentum", {"momentum": 0.45, "fast_news": 0.25, "sentiment": 0.15, "odds": 0.15}),
+            # === TIER 1: SAFE BOTS (Priority for conservative strategy) ===
+            ("Arbitrage Hunter", "arbitrage", {"arbitrage": 1.0}),
+            ("High Prob Bond", "high_probability", {"odds": 1.0}),
+            ("Smart Money Copy", "smart_money_copier", {"whale": 0.6, "smart_money": 0.4}),
+
+            # === TIER 2: LOW-MEDIUM RISK ===
             ("Conservative Value", "value", {"momentum": 0.10, "fast_news": 0.15, "sentiment": 0.25, "odds": 0.50}),
-            ("News Racer", "news_racer", {"momentum": 0.10, "fast_news": 0.60, "sentiment": 0.15, "odds": 0.15}),
             ("Whale Watcher", "whale", {"momentum": 0.10, "fast_news": 0.10, "whale": 0.60, "odds": 0.20}),
-            ("Sentiment Surfer", "sentiment", {"momentum": 0.10, "fast_news": 0.25, "sentiment": 0.50, "odds": 0.15}),
             ("Balanced Bot", "ensemble", {"momentum": 0.20, "fast_news": 0.20, "sentiment": 0.20, "odds": 0.20, "whale": 0.20}),
+
+            # === TIER 3: MEDIUM-HIGH RISK ===
+            ("Aggressive Alpha", "momentum", {"momentum": 0.45, "fast_news": 0.25, "sentiment": 0.15, "odds": 0.15}),
+            ("News Racer", "news_racer", {"momentum": 0.10, "fast_news": 0.60, "sentiment": 0.15, "odds": 0.15}),
+            ("Sentiment Surfer", "sentiment", {"momentum": 0.10, "fast_news": 0.25, "sentiment": 0.50, "odds": 0.15}),
+
+            # === TIER 4: HIGH RISK ===
             ("Contrarian Carl", "contrarian", {"momentum": -0.20, "fast_news": 0.10, "sentiment": -0.30, "odds": 0.40}),
         ]
 
@@ -447,6 +472,9 @@ class BotTournament:
             self._save_state()
             self._log_standings()
 
+            # Save daily summary for calendar
+            self._save_daily_summary(today)
+
     def _advance_bot(self, bot: BotProfile):
         """Advance bot to next tier."""
         if bot.tier.value < BettingTier.LARGE.value:
@@ -513,6 +541,65 @@ class BotTournament:
                 new_bot.generation = best_bot.generation + 1
 
                 active_count += 1
+
+    def _save_daily_summary(self, today: date):
+        """Save daily summary for calendar display."""
+        CALENDAR_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Calculate today's stats
+        today_pnl = 0.0
+        bets_placed = 0
+        bets_resolved = 0
+        wins = 0
+        losses = 0
+
+        for bet in self.all_bets:
+            if bet.placed_at.date() == today:
+                bets_placed += 1
+            if bet.resolved_at and bet.resolved_at.date() == today:
+                bets_resolved += 1
+                today_pnl += bet.pnl or 0
+                if bet.status == "won":
+                    wins += 1
+                elif bet.status == "lost":
+                    losses += 1
+
+        # Find best and worst performing bots today
+        bot_pnls = {}
+        for bot in self.bots.values():
+            if bot.status == BotStatus.ELIMINATED:
+                continue
+            bot_day_pnl = sum(
+                b.pnl or 0 for b in bot.bet_history
+                if b.resolved_at and b.resolved_at.date() == today
+            )
+            bot_pnls[bot.name] = bot_day_pnl
+
+        best_bot = max(bot_pnls.items(), key=lambda x: x[1], default=("", 0))[0] if bot_pnls else ""
+        worst_bot = min(bot_pnls.items(), key=lambda x: x[1], default=("", 0))[0] if bot_pnls else ""
+
+        summary = {
+            "date": today.strftime("%Y-%m-%d"),
+            "total_pnl": today_pnl,
+            "bets_placed": bets_placed,
+            "bets_resolved": bets_resolved,
+            "wins": wins,
+            "losses": losses,
+            "best_bot": best_bot,
+            "worst_bot": worst_bot,
+            "signals_processed": 0,  # Would be populated by signal collector
+            "whale_trades_detected": 0,  # Would be populated by whale tracker
+            "tasks_completed": [],
+            "notes": "",
+        }
+
+        file_path = CALENDAR_DATA_DIR / f"{today.strftime('%Y-%m-%d')}.json"
+        try:
+            with open(file_path, "w") as f:
+                json.dump(summary, f, indent=2)
+            logger.info(f"Saved daily summary for {today}")
+        except Exception as e:
+            logger.error(f"Failed to save daily summary: {e}")
 
     def _log_standings(self):
         """Log current tournament standings."""
@@ -587,55 +674,374 @@ class BotTournament:
             return sorted(upcoming, key=lambda x: x.get("time_to_maturity", 999))
 
     def simulate_round(self):
-        """Simulate a round of betting for all bots."""
+        """Simulate a round of betting for all bots using their strategies."""
+        from src.autonomous.strategies import get_strategy, simulate_market_opportunity
+
         with self._lock:
+            # Generate market opportunities for this round
+            num_opportunities = random.randint(5, 10)
+            opportunities = [simulate_market_opportunity() for _ in range(num_opportunities)]
+
             for bot in self.bots.values():
                 if bot.status == BotStatus.ELIMINATED:
                     continue
 
-                # Simulate 1-3 bets per bot per round
-                num_bets = random.randint(1, 3)
+                # Get bot's strategy
+                strategy = get_strategy(bot.strategy_type, bot.weights)
 
-                for _ in range(num_bets):
-                    # Generate fake market data
-                    markets = [
-                        ("Will Bitcoin exceed $100k by Feb 2026?", random.uniform(0.3, 0.7)),
-                        ("Will Trump win 2028 election?", random.uniform(0.4, 0.6)),
-                        ("Will Fed cut rates in Q1 2026?", random.uniform(0.5, 0.8)),
-                        ("Will AI regulation pass in 2026?", random.uniform(0.3, 0.5)),
-                        ("Will inflation drop below 2% by June?", random.uniform(0.2, 0.4)),
-                    ]
+                # Evaluate each market opportunity
+                for market in opportunities:
+                    decision = strategy.evaluate(market)
 
-                    market_q, base_price = random.choice(markets)
-                    side = random.choice(["yes", "no"])
-                    price = base_price if side == "yes" else 1 - base_price
+                    if not decision.should_bet:
+                        continue
 
-                    # Bet size based on tier
+                    # Check if bot has capital
                     min_bet, max_bet = bot.tier.bet_range
                     if min_bet == 0:
-                        amount = random.uniform(50, 200)  # Simulation amounts
+                        base_amount = random.uniform(50, 200)
                     else:
-                        amount = random.uniform(min_bet, max_bet)
+                        base_amount = random.uniform(min_bet, max_bet)
+
+                    # Apply strategy's size multiplier
+                    amount = base_amount * decision.size_multiplier
+
+                    # Ensure bot has enough capital
+                    if amount > bot.current_capital * 0.25:  # Max 25% of capital per bet
+                        amount = bot.current_capital * 0.25
+
+                    if amount < 10:  # Minimum bet size
+                        continue
+
+                    price = market.yes_price if decision.side == "yes" else market.no_price
 
                     self.record_bet(
                         bot_id=bot.id,
-                        market_id=f"market_{random.randint(1000, 9999)}",
-                        market_question=market_q,
-                        side=side,
+                        market_id=market.market_id,
+                        market_question=market.question,
+                        side=decision.side,
                         amount=amount,
                         entry_price=price,
                         matures_at=datetime.utcnow() + timedelta(hours=random.randint(1, 72))
                     )
 
-            # Resolve some open bets randomly
+                    logger.debug(
+                        f"{bot.name} ({strategy.name}): {decision.side.upper()} ${amount:.0f} "
+                        f"on '{market.question[:30]}...' (conf: {decision.confidence:.0%})"
+                    )
+
+            # Resolve some open bets based on strategy quality
             for bot in self.bots.values():
+                strategy = get_strategy(bot.strategy_type, bot.weights)
+
                 for bet in list(bot.open_bets):
-                    if random.random() < 0.1:  # 10% chance to resolve
-                        won = random.random() < (0.5 + (bot.sharpe_ratio * 0.05))  # Slightly skill-based
+                    if random.random() < 0.1:  # 10% chance to resolve per round
+                        # Win probability based on strategy risk level and confidence
+                        base_win_prob = {
+                            "very_low": 0.70,   # Arbitrage, high-prob
+                            "low": 0.58,        # Copy-trade, value
+                            "medium": 0.52,     # Momentum, ensemble
+                            "high": 0.48,       # News racing
+                            "very_high": 0.42,  # Contrarian
+                        }.get(strategy.risk_level.value, 0.50)
+
+                        # Sharpe ratio bonus
+                        win_prob = base_win_prob + (bot.sharpe_ratio * 0.02)
+
+                        won = random.random() < win_prob
                         exit_price = random.uniform(0.1, 0.9)
                         self.resolve_bet(bet.id, won, exit_price)
 
             self._save_state()
+
+    async def real_trading_round(
+        self,
+        poly_client=None,
+        kalshi_client=None,
+        db_session=None,
+        min_edge: float = 0.05,
+        min_confidence: float = 0.5,
+        max_markets_per_round: int = 20
+    ) -> Dict[str, Any]:
+        """
+        Execute a real paper trading round using actual market data.
+
+        Instead of synthetic simulation, this:
+        1. Discovers real markets from Polymarket/Kalshi
+        2. Each bot researches markets using its specialized methodology
+        3. Places paper bets if edge is found
+        4. Stores predictions for later resolution tracking
+
+        Args:
+            poly_client: PolymarketClient instance
+            kalshi_client: KalshiClient instance
+            db_session: SQLAlchemy session
+            min_edge: Minimum edge required to place bet
+            min_confidence: Minimum confidence required
+            max_markets_per_round: Limit markets evaluated per round
+
+        Returns:
+            Summary of round results
+        """
+        if not HAS_REAL_TRADING:
+            logger.warning("Real trading not available, falling back to simulation")
+            self.simulate_round()
+            return {"mode": "simulation", "reason": "modules_not_available"}
+
+        if not poly_client and not kalshi_client:
+            logger.warning("No API clients provided, falling back to simulation")
+            self.simulate_round()
+            return {"mode": "simulation", "reason": "no_clients"}
+
+        round_stats = {
+            "mode": "real",
+            "timestamp": datetime.utcnow().isoformat(),
+            "markets_scanned": 0,
+            "markets_researched": 0,
+            "bets_placed": 0,
+            "bots_active": 0,
+            "estimates_saved": 0,
+            "bot_results": {}
+        }
+
+        with self._lock:
+            # Step 1: Discover real markets
+            scanner = MarketScanner(
+                poly_client=poly_client,
+                kalshi_client=kalshi_client,
+                db_session=db_session
+            )
+
+            markets = scanner.scan_for_opportunities(
+                min_liquidity=10000,
+                max_days_to_resolution=180,
+                min_days_to_resolution=1,
+                min_volume_24h=1000,
+                max_spread=0.10,
+                limit_per_platform=max_markets_per_round
+            )
+
+            round_stats["markets_scanned"] = len(markets)
+            logger.info(f"Real trading round: Found {len(markets)} market opportunities")
+
+            if not markets:
+                logger.warning("No markets found meeting criteria")
+                return round_stats
+
+            # Step 2: Each bot researches and potentially bets
+            active_bots = [b for b in self.bots.values() if b.status != BotStatus.ELIMINATED]
+            round_stats["bots_active"] = len(active_bots)
+
+            # Initialize resolution tracker if we have db session
+            resolution_tracker = None
+            if db_session:
+                resolution_tracker = ResolutionTracker(
+                    db_session=db_session,
+                    market_scanner=scanner
+                )
+
+            for bot in active_bots:
+                bot_stats = {
+                    "markets_evaluated": 0,
+                    "estimates_made": 0,
+                    "bets_placed": 0,
+                    "total_edge": 0
+                }
+
+                # Get researcher for this bot's strategy
+                researcher = get_researcher_for_bot(bot.strategy_type)
+
+                # Evaluate markets (limit per bot to control API costs)
+                markets_for_bot = markets[:max_markets_per_round]
+
+                for market in markets_for_bot:
+                    bot_stats["markets_evaluated"] += 1
+
+                    try:
+                        # Research the market
+                        estimate = await researcher.research_market(
+                            market_id=market.market_id,
+                            platform=market.platform,
+                            question=market.question,
+                            description=market.description,
+                            current_price=market.current_yes_price,
+                            category=market.category,
+                            extra_data=market.extra_data
+                        )
+
+                        if estimate is None:
+                            continue
+
+                        bot_stats["estimates_made"] += 1
+                        round_stats["markets_researched"] += 1
+
+                        # Check if edge meets threshold
+                        edge = estimate.edge()
+                        if edge < min_edge:
+                            continue
+
+                        if estimate.confidence < min_confidence:
+                            continue
+
+                        bot_stats["total_edge"] += edge
+
+                        # Determine bet size based on tier and confidence
+                        min_bet, max_bet = bot.tier.bet_range
+                        if min_bet == 0:
+                            base_amount = 100  # Simulation default
+                        else:
+                            base_amount = (min_bet + max_bet) / 2
+
+                        # Scale by confidence and domain performance
+                        domain_multiplier = 1.0
+                        if db_session:
+                            domain_spec = DomainSpecialist(db_session)
+                            domain_multiplier = domain_spec.get_domain_multiplier(
+                                bot.id, market.category
+                            )
+
+                        amount = base_amount * estimate.confidence * domain_multiplier
+
+                        # Cap at 25% of capital
+                        if amount > bot.current_capital * 0.25:
+                            amount = bot.current_capital * 0.25
+
+                        if amount < 10:
+                            continue
+
+                        # Record the bet
+                        bet = self.record_bet(
+                            bot_id=bot.id,
+                            market_id=market.market_id,
+                            market_question=market.question,
+                            side=estimate.direction(),
+                            amount=amount,
+                            entry_price=market.current_yes_price if estimate.direction() == "yes" else market.current_no_price,
+                            matures_at=market.end_date
+                        )
+
+                        if bet:
+                            bot_stats["bets_placed"] += 1
+                            round_stats["bets_placed"] += 1
+
+                            # Save research estimate to database
+                            if db_session:
+                                research_record = ResearchEstimate(
+                                    platform=market.platform,
+                                    market_id=market.market_id,
+                                    market_question=market.question,
+                                    market_category=market.category,
+                                    bot_id=bot.id,
+                                    researcher_type=researcher.researcher_type,
+                                    estimated_probability=estimate.estimated_probability,
+                                    confidence=estimate.confidence,
+                                    reasoning=estimate.reasoning,
+                                    market_price_at_estimate=market.current_yes_price,
+                                    edge_at_estimate=edge,
+                                    sources_used=estimate.sources_used,
+                                    raw_analysis=estimate.raw_analysis,
+                                    paper_trade_id=None,  # Would link if we had trade ID
+                                    created_at=datetime.utcnow()
+                                )
+                                db_session.add(research_record)
+                                db_session.flush()
+                                round_stats["estimates_saved"] += 1
+
+                                # Add to pending resolution tracker
+                                if resolution_tracker:
+                                    resolution_tracker.add_pending_resolution(
+                                        platform=market.platform,
+                                        market_id=market.market_id,
+                                        market_question=market.question,
+                                        expected_resolution_date=market.end_date,
+                                        research_estimate_id=research_record.id
+                                    )
+
+                            logger.info(
+                                f"{bot.name} bet ${amount:.0f} {estimate.direction().upper()} "
+                                f"on '{market.question[:40]}...' "
+                                f"(edge: {edge:.1%}, conf: {estimate.confidence:.0%})"
+                            )
+
+                    except Exception as e:
+                        logger.error(f"Error researching market for {bot.name}: {e}")
+                        continue
+
+                round_stats["bot_results"][bot.id] = bot_stats
+
+            # Commit database changes
+            if db_session:
+                try:
+                    db_session.commit()
+                except Exception as e:
+                    logger.error(f"Error committing database: {e}")
+                    db_session.rollback()
+
+            self._save_state()
+
+        logger.info(
+            f"Real trading round complete: {round_stats['bets_placed']} bets placed "
+            f"across {round_stats['bots_active']} bots"
+        )
+
+        return round_stats
+
+    def get_pending_resolutions_summary(self, db_session=None) -> Dict[str, Any]:
+        """Get summary of markets awaiting resolution."""
+        if not db_session or not HAS_REAL_TRADING:
+            return {"available": False}
+
+        try:
+            pending = db_session.query(PendingResolution).filter_by(
+                status="pending"
+            ).all()
+
+            return {
+                "available": True,
+                "total_pending": len(pending),
+                "by_platform": {
+                    "polymarket": len([p for p in pending if p.platform == "polymarket"]),
+                    "kalshi": len([p for p in pending if p.platform == "kalshi"])
+                },
+                "upcoming_week": len([
+                    p for p in pending
+                    if p.expected_resolution_date
+                    and (p.expected_resolution_date - datetime.utcnow()).days <= 7
+                ]),
+                "markets": [
+                    {
+                        "platform": p.platform,
+                        "market_id": p.market_id,
+                        "question": p.market_question[:100],
+                        "expected_date": p.expected_resolution_date.isoformat() if p.expected_resolution_date else None,
+                        "estimates_count": len(p.research_estimate_ids or []),
+                        "trades_count": len(p.paper_trade_ids or [])
+                    }
+                    for p in pending[:20]
+                ]
+            }
+        except Exception as e:
+            logger.error(f"Error getting pending resolutions: {e}")
+            return {"available": False, "error": str(e)}
+
+    def get_bot_learning_summary(self, bot_id: str, db_session=None) -> Dict[str, Any]:
+        """Get learning/calibration summary for a specific bot."""
+        if not db_session or not HAS_REAL_TRADING:
+            return {"available": False}
+
+        try:
+            calibration = CalibrationTracker(db_session)
+            domain = DomainSpecialist(db_session)
+
+            return {
+                "available": True,
+                "bot_id": bot_id,
+                "calibration": calibration.get_calibration_summary(bot_id),
+                "domains": domain.get_domain_summary(bot_id)
+            }
+        except Exception as e:
+            logger.error(f"Error getting bot learning summary: {e}")
+            return {"available": False, "error": str(e)}
 
 
 def get_tournament() -> BotTournament:

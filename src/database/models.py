@@ -402,3 +402,155 @@ class PaperTrade(Base):
         Index("ix_paper_trade_status", "status"),
         Index("ix_paper_trade_market", "platform", "market_id"),
     )
+
+
+# =============================================================================
+# Real Paper Trading Models (Phase 2)
+# =============================================================================
+
+
+class ResearchEstimate(Base):
+    """
+    Stores probability estimates with full reasoning from research agents.
+
+    Each bot type has a researcher that produces estimates using distinct
+    methodologies (superforecaster, news analysis, whale tracking, etc.).
+    """
+    __tablename__ = "research_estimates"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Market identification
+    platform = Column(String(50), nullable=False)  # polymarket, kalshi
+    market_id = Column(String(255), nullable=False)
+    market_question = Column(Text, nullable=False)
+    market_category = Column(String(100), nullable=True)
+
+    # Bot/researcher identification
+    bot_id = Column(String(100), nullable=False)
+    researcher_type = Column(String(100), nullable=False)  # conservative, news, whale, etc.
+
+    # The estimate itself
+    estimated_probability = Column(Float, nullable=False)  # 0-1
+    confidence = Column(Float, nullable=False)  # 0-1
+    reasoning = Column(Text, nullable=False)  # Human-readable explanation
+
+    # Research metadata
+    market_price_at_estimate = Column(Float, nullable=False)  # Current price when estimated
+    edge_at_estimate = Column(Float, nullable=True)  # Calculated edge
+    sources_used = Column(JSON, nullable=True)  # List of sources consulted
+    raw_analysis = Column(JSON, nullable=True)  # Full structured analysis
+
+    # Timing
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Resolution (filled in later when market resolves)
+    actual_outcome = Column(Float, nullable=True)  # 1.0 for yes, 0.0 for no
+    brier_score = Column(Float, nullable=True)  # (predicted - actual)^2
+    market_brier_score = Column(Float, nullable=True)  # For comparison
+    edge_realized = Column(Float, nullable=True)  # market_brier - our_brier
+    resolved_at = Column(DateTime, nullable=True)
+
+    # Link to trade if one was made
+    paper_trade_id = Column(Integer, ForeignKey("paper_trades.id"), nullable=True)
+
+    __table_args__ = (
+        Index("ix_research_bot", "bot_id"),
+        Index("ix_research_market", "platform", "market_id"),
+        Index("ix_research_type", "researcher_type"),
+        Index("ix_research_created", "created_at"),
+        Index("ix_research_resolved", "resolved_at"),
+    )
+
+
+class BotMemory(Base):
+    """
+    Per-bot learning storage for adaptive improvement.
+
+    Stores signal weights, calibration data, domain performance,
+    and confidence adjustments that update based on resolved predictions.
+    """
+    __tablename__ = "bot_memories"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    bot_id = Column(String(100), unique=True, nullable=False)
+
+    # Signal weights (learned over time)
+    signal_weights = Column(JSON, nullable=True, default=dict)
+    # Example: {"base_rate": 0.3, "news": 0.2, "momentum": 0.15, ...}
+
+    # Calibration buckets (track accuracy per confidence level)
+    calibration_buckets = Column(JSON, nullable=True, default=dict)
+    # Example: {"0.5-0.6": {"count": 50, "actual_rate": 0.58}, ...}
+
+    # Domain-specific performance
+    domain_performance = Column(JSON, nullable=True, default=dict)
+    # Example: {"politics": {"brier": 0.15, "count": 30}, "crypto": {"brier": 0.22, "count": 20}}
+
+    # Confidence multiplier (adjustment based on calibration)
+    confidence_multiplier = Column(Float, default=1.0)
+    # If bot is overconfident, this drops below 1.0
+
+    # Source reliability scores (learned)
+    source_scores = Column(JSON, nullable=True, default=dict)
+    # Example: {"reuters": 0.85, "twitter": 0.45, ...}
+
+    # Aggregate statistics
+    total_predictions = Column(Integer, default=0)
+    resolved_predictions = Column(Integer, default=0)
+    average_brier_score = Column(Float, nullable=True)
+    average_edge = Column(Float, nullable=True)
+
+    # Learning metadata
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_learning_update = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ix_bot_memory_bot", "bot_id"),
+    )
+
+
+class PendingResolution(Base):
+    """
+    Markets awaiting resolution with linked paper trades.
+
+    Tracks all markets where we have open predictions/bets,
+    allowing the resolution worker to efficiently check for outcomes.
+    """
+    __tablename__ = "pending_resolutions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Market identification
+    platform = Column(String(50), nullable=False)  # polymarket, kalshi
+    market_id = Column(String(255), nullable=False)
+    market_question = Column(Text, nullable=False)
+
+    # Expected resolution timing
+    expected_resolution_date = Column(DateTime, nullable=True)
+    market_end_date = Column(DateTime, nullable=True)
+
+    # Linked predictions and trades (JSON arrays of IDs)
+    research_estimate_ids = Column(JSON, nullable=True, default=list)
+    paper_trade_ids = Column(JSON, nullable=True, default=list)
+
+    # Status tracking
+    status = Column(String(50), default="pending")  # pending, resolved, expired, error
+    last_checked = Column(DateTime, nullable=True)
+    check_count = Column(Integer, default=0)
+
+    # Resolution outcome (filled when resolved)
+    resolution = Column(String(50), nullable=True)  # yes, no, cancelled
+    resolution_value = Column(Float, nullable=True)  # 1.0 for yes, 0.0 for no
+    resolved_at = Column(DateTime, nullable=True)
+
+    # Timing
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("platform", "market_id", name="uq_pending_platform_market"),
+        Index("ix_pending_status", "status"),
+        Index("ix_pending_expected", "expected_resolution_date"),
+        Index("ix_pending_last_checked", "last_checked"),
+    )
