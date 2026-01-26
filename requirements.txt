@@ -41,11 +41,17 @@ web3>=6.14.0
 
 # AI / ML
 openai>=1.6.0
+anthropic>=0.18.0         # Claude API for research agents
 scikit-learn>=1.3.0
 
 # Signal Detection
-pytrends>=4.9.0           # Google Trends
+pytrends>=4.9.0           # Google Trends (optional, may be unreliable)
 textblob>=0.17.0          # Sentiment analysis
+newsapi-python>=0.2.7     # News API for sentiment signals
+
+# Real-time
+websockets>=12.0          # WebSocket connections
+redis>=5.0.0              # Caching (optional)
 
 # Testing
 pytest>=7.4.0
