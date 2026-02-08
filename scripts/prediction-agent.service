@@ -1,0 +1,23 @@
+[Unit]
+Description=Prediction Markets Trading Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/prediction-bots
+ExecStart=/opt/prediction-bots/.venv/bin/python3 run_agent.py
+Restart=always
+RestartSec=30
+Environment=PYTHONPATH=/opt/prediction-bots
+EnvironmentFile=/opt/prediction-bots/.env
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=prediction-agent
+
+# Safety: restart on OOM
+OOMPolicy=continue
+
+[Install]
+WantedBy=multi-user.target

@@ -7,13 +7,14 @@ automatically without user intervention.
 
 import asyncio
 import json
+import os
 import random
 import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from loguru import logger
 
@@ -46,6 +47,10 @@ class AgentState:
     # Errors
     consecutive_errors: int = 0
     last_error: Optional[str] = None
+
+    # Health tracking
+    degraded_sources: List[str] = field(default_factory=list)
+    healthy_sources: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -115,10 +120,14 @@ class AutonomousAgent:
         self._simulator = None
         self._leaderboard = None
         self._alert_manager = None
+        self._realtime_manager = None
+        self._realtime_signals: List[Any] = []  # Store recent real-time signals
 
         # State persistence
         self._state_path = Path(self.config.state_file)
         self._log_path = Path(self.config.log_file)
+        self._heartbeat_path = Path("data/heartbeat.json")
+        self._pid_path = Path("data/agent.pid")
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Load previous state
@@ -134,6 +143,7 @@ class AutonomousAgent:
         self.state.is_running = True
         self.state.started_at = datetime.utcnow()
         self._stop_event.clear()
+        self._write_pid()
 
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
@@ -154,6 +164,7 @@ class AutonomousAgent:
 
         self.state.is_running = False
         self._save_state()
+        self._clean_pid()
         self._log_event("agent_stopped", {"cycles": self.state.cycles_completed})
         logger.info("Autonomous agent stopped")
 
@@ -285,6 +296,9 @@ class AutonomousAgent:
                     self.state.last_cycle_at = now
                     self.state.consecutive_errors = 0
 
+                # Write heartbeat every cycle
+                self._write_heartbeat()
+
                 # Save state periodically
                 if self.state.cycles_completed % 10 == 0:
                     self._save_state()
@@ -298,12 +312,56 @@ class AutonomousAgent:
                     self.state.consecutive_errors += 1
                     self.state.last_error = str(e)
 
-                # If too many errors, slow down
-                if self.state.consecutive_errors > 10:
-                    logger.warning("Too many errors, slowing down...")
-                    time.sleep(60)
-                else:
-                    time.sleep(5)
+                # Write heartbeat even during errors so health checker
+                # knows the process is alive (just degraded)
+                self._write_heartbeat()
+
+                # Exponential backoff: 5s * 2^errors, capped at 300s
+                backoff = min(300, 5 * (2 ** self.state.consecutive_errors))
+                logger.warning(f"Backing off for {backoff}s (consecutive errors: {self.state.consecutive_errors})")
+                time.sleep(backoff)
+
+    def _start_realtime(self):
+        """Start real-time WebSocket signal manager."""
+        try:
+            from src.realtime.realtime_signal_manager import (
+                RealtimeSignalManager,
+                RealtimeSignal,
+            )
+
+            if self._realtime_manager is None:
+                self._realtime_manager = RealtimeSignalManager()
+
+                # Register callback to capture real-time signals
+                def handle_realtime_signal(signal: RealtimeSignal):
+                    self._handle_realtime_signal(signal)
+
+                self._realtime_manager.on_signal(handle_realtime_signal)
+
+                # Start in a background thread
+                import threading
+
+                def run_async():
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(self._realtime_manager.start())
+
+                thread = threading.Thread(target=run_async, daemon=True)
+                thread.start()
+                logger.info("Real-time signal manager started")
+
+        except Exception as e:
+            logger.warning(f"Could not start real-time manager: {e}")
+
+    def _handle_realtime_signal(self, signal: Any):
+        """Handle incoming real-time signal."""
+        with self._lock:
+            # Keep last 100 real-time signals
+            self._realtime_signals.append(signal)
+            if len(self._realtime_signals) > 100:
+                self._realtime_signals = self._realtime_signals[-100:]
+
+        logger.debug(f"Real-time signal: {signal.market_id} - {signal.signal_type}")
 
     def _collect_signals(self):
         """Collect signals from all sources."""
@@ -311,6 +369,41 @@ class AutonomousAgent:
 
         try:
             signals = []
+            degraded = []
+            healthy = []
+
+            # Start real-time manager if not already running
+            if self._realtime_manager is None:
+                self._start_realtime()
+
+            # Merge real-time signals
+            with self._lock:
+                realtime_count = len(self._realtime_signals)
+                # Convert real-time signals to standard signal format
+                for rt_signal in self._realtime_signals[-20:]:  # Last 20
+                    try:
+                        from src.signals.base import SignalResult, SignalDirection, SignalStrength
+
+                        direction = SignalDirection.BULLISH if rt_signal.direction == "bullish" else (
+                            SignalDirection.BEARISH if rt_signal.direction == "bearish" else SignalDirection.NEUTRAL
+                        )
+
+                        signals.append(SignalResult(
+                            name=f"RT: {rt_signal.signal_type}",
+                            source="realtime_websocket",
+                            timestamp=rt_signal.timestamp,
+                            value=rt_signal.strength,
+                            direction=direction,
+                            confidence=0.5 + rt_signal.strength * 0.3,
+                            strength=SignalStrength.STRONG if rt_signal.strength > 0.5 else SignalStrength.MODERATE,
+                            raw_data=rt_signal.details,
+                            related_markets=[rt_signal.market_id],
+                            metadata={"realtime": True, "signal_type": rt_signal.signal_type}
+                        ))
+                    except Exception as e:
+                        logger.debug(f"Error converting real-time signal: {e}")
+
+                logger.debug(f"Added {realtime_count} real-time signals")
 
             # News sentiment
             try:
@@ -318,8 +411,10 @@ class AutonomousAgent:
                 detector = NewsSentimentSignalDetector()
                 news_signals = detector.run()
                 signals.extend(news_signals)
+                healthy.append("news_sentiment")
                 logger.debug(f"Collected {len(news_signals)} news signals")
             except Exception as e:
+                degraded.append("news_sentiment")
                 logger.warning(f"News signal collection failed: {e}")
 
             # Whale tracking
@@ -328,8 +423,10 @@ class AutonomousAgent:
                 detector = WhaleTrackerSignalDetector()
                 whale_signals = detector.run()
                 signals.extend(whale_signals)
+                healthy.append("whale_tracker")
                 logger.debug(f"Collected {len(whale_signals)} whale signals")
             except Exception as e:
+                degraded.append("whale_tracker")
                 logger.warning(f"Whale signal collection failed: {e}")
 
             # Social sentiment
@@ -338,8 +435,10 @@ class AutonomousAgent:
                 detector = SocialSentimentSignalDetector()
                 social_signals = detector.run()
                 signals.extend(social_signals)
+                healthy.append("social_sentiment")
                 logger.debug(f"Collected {len(social_signals)} social signals")
             except Exception as e:
+                degraded.append("social_sentiment")
                 logger.warning(f"Social signal collection failed: {e}")
 
             # Odds movement
@@ -348,8 +447,10 @@ class AutonomousAgent:
                 detector = OddsMovementSignalDetector()
                 odds_signals = detector.run()
                 signals.extend(odds_signals)
+                healthy.append("odds_movement")
                 logger.debug(f"Collected {len(odds_signals)} odds signals")
             except Exception as e:
+                degraded.append("odds_movement")
                 logger.warning(f"Odds signal collection failed: {e}")
 
             # Fast news (low-latency news for edge)
@@ -358,35 +459,73 @@ class AutonomousAgent:
                 detector = FastNewsSignalDetector()
                 fast_news_signals = detector.run()
                 signals.extend(fast_news_signals)
+                healthy.append("fast_news")
                 logger.debug(f"Collected {len(fast_news_signals)} fast news signals")
             except Exception as e:
+                degraded.append("fast_news")
                 logger.warning(f"Fast news signal collection failed: {e}")
 
             with self._lock:
                 self.state.today_signals_collected += len(signals)
+                self.state.degraded_sources = degraded
+                self.state.healthy_sources = healthy
 
             # Store signals for ensemble
             self._current_signals = signals
 
             self._log_event("signals_collected", {
                 "count": len(signals),
-                "sources": list(set(s.source for s in signals))
+                "sources": list(set(s.source for s in signals)),
+                "degraded": degraded,
             })
 
-            logger.info(f"Collected {len(signals)} total signals")
+            if degraded:
+                logger.warning(f"Degraded sources: {', '.join(degraded)}")
+            logger.info(f"Collected {len(signals)} total signals ({len(healthy)} sources ok, {len(degraded)} degraded)")
 
         except Exception as e:
             logger.error(f"Signal collection error: {e}")
+
+    def _is_high_fee_market(self, question: str) -> bool:
+        """
+        Check if a market is a high-fee 15-minute crypto market.
+
+        These markets have 3.15% dynamic fees that make them unprofitable.
+        Pattern: Contains "15 minutes"/"15 min" AND crypto keywords.
+        """
+        q = question.lower()
+
+        # Check for 15-minute timeframe
+        has_15min = any(pattern in q for pattern in [
+            "15 min", "15-min", "15min", "15 minute", "15-minute",
+            "next 15", "within 15"
+        ])
+
+        if not has_15min:
+            return False
+
+        # Check for crypto keywords
+        crypto_keywords = [
+            "bitcoin", "btc", "ethereum", "eth", "crypto",
+            "solana", "sol", "doge", "xrp", "bnb"
+        ]
+        has_crypto = any(kw in q for kw in crypto_keywords)
+
+        return has_crypto
 
     def _evaluate_and_trade(self):
         """Evaluate opportunities and execute trades."""
         logger.debug("Evaluating trading opportunities...")
 
         try:
-            # Get current markets
-            from src.clients.polymarket_client import PolymarketClient
-            client = PolymarketClient()
-            markets = client.get_markets(limit=50)
+            # Get current markets — hardened against network failures
+            try:
+                from src.clients.polymarket_client import PolymarketClient
+                client = PolymarketClient()
+                markets = client.get_markets(limit=50)
+            except Exception as e:
+                logger.warning(f"Market fetch failed (skipping cycle): {e}")
+                return
 
             if not markets:
                 return
@@ -399,6 +538,7 @@ class AutonomousAgent:
             signals = getattr(self, '_current_signals', [])
 
             opportunities = []
+            filtered_count = 0
             for market in markets:
                 # Handle both dict and dataclass market objects
                 if hasattr(market, 'id'):
@@ -415,6 +555,12 @@ class AutonomousAgent:
                     current_price = float(current_price)
                 except (TypeError, ValueError):
                     current_price = 0.5
+
+                # Filter out high-fee 15-minute crypto markets
+                if self._is_high_fee_market(question):
+                    filtered_count += 1
+                    logger.debug(f"Skipping high-fee market: {question[:50]}...")
+                    continue
 
                 # Get prediction from ensemble
                 prediction = self._ensemble.predict(
@@ -446,6 +592,8 @@ class AutonomousAgent:
                 for opp in opportunities[:3]:  # Top 3 opportunities
                     self._execute_trade(opp)
 
+            if filtered_count > 0:
+                logger.debug(f"Filtered {filtered_count} high-fee markets")
             logger.info(f"Found {len(opportunities)} trading opportunities")
 
         except Exception as e:
@@ -773,6 +921,41 @@ Strategy: {self.state.active_strategy} {self.state.strategy_version}
 
         except Exception as e:
             logger.warning(f"Could not load state: {e}")
+
+    def _write_heartbeat(self):
+        """Write heartbeat file for health checker to monitor."""
+        try:
+            heartbeat = {
+                "agent": datetime.utcnow().isoformat(),
+                "cycle": self.state.cycles_completed,
+                "pid": os.getpid(),
+                "consecutive_errors": self.state.consecutive_errors,
+                "degraded_sources": self.state.degraded_sources,
+                "healthy_sources": self.state.healthy_sources,
+                "last_error": self.state.last_error,
+            }
+            tmp_path = self._heartbeat_path.with_suffix(".tmp")
+            with open(tmp_path, "w") as f:
+                json.dump(heartbeat, f, indent=2)
+            tmp_path.replace(self._heartbeat_path)
+        except Exception as e:
+            logger.error(f"Heartbeat write error: {e}")
+
+    def _write_pid(self):
+        """Write PID file on startup."""
+        try:
+            with open(self._pid_path, "w") as f:
+                f.write(str(os.getpid()))
+        except Exception as e:
+            logger.error(f"PID write error: {e}")
+
+    def _clean_pid(self):
+        """Remove PID file on shutdown."""
+        try:
+            if self._pid_path.exists():
+                self._pid_path.unlink()
+        except Exception as e:
+            logger.error(f"PID cleanup error: {e}")
 
 
 # Global agent instance

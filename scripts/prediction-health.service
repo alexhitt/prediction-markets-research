@@ -1,0 +1,13 @@
+[Unit]
+Description=Prediction Bot Health Checker
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/prediction-bots
+ExecStart=/opt/prediction-bots/.venv/bin/python3 scripts/health_checker.py
+EnvironmentFile=/opt/prediction-bots/.env
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=prediction-health
