@@ -1,0 +1,7 @@
+Last session: 2026-03-30
+Status: active
+Built: Asian weather shadow tracker (run_asian_weather_shadow.py + src/calibration/emos.py), --status CLI dashboard, DESIGN.md, launchd plist
+In progress: Data collection (Day 1 of 14), EMOS cold start (naive Gaussian phase)
+Blocked: nothing
+Next: Activate launchd plist, monitor --status daily, Day 7 checkpoint for Delta_T + accuracy, EMOS training at Day 15
+Phase: Shadow mode validation — kill/promote decision at Day 14
