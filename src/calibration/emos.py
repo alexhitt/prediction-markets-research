@@ -84,32 +84,47 @@ def fetch_ensemble_forecast(
 
     Returns (ifs_members, aifs_members) for the first forecast day.
     IFS: 50 perturbed members. AIFS: 50 perturbed members.
+    Retries once on failure with a 5-second backoff.
     """
+    import time
+
     ifs_members: List[float] = []
     aifs_members: List[float] = []
 
     for model, target in [("ecmwf_ifs025", ifs_members), ("ecmwf_aifs025", aifs_members)]:
-        try:
-            resp = requests.get(
-                ENSEMBLE_API,
-                params={
-                    "latitude": lat,
-                    "longitude": lon,
-                    "daily": "temperature_2m_max",
-                    "models": model,
-                    "forecast_days": forecast_days,
-                },
-                timeout=HTTP_TIMEOUT,
-            )
-            resp.raise_for_status()
-            daily = resp.json().get("daily", {})
-            for key, vals in daily.items():
-                if "member" in key and vals:
-                    val = vals[0]  # first forecast day
-                    if val is not None:
-                        target.append(val)
-        except (requests.RequestException, KeyError, IndexError):
-            pass
+        for attempt in range(2):
+            try:
+                resp = requests.get(
+                    ENSEMBLE_API,
+                    params={
+                        "latitude": lat,
+                        "longitude": lon,
+                        "daily": "temperature_2m_max",
+                        "models": model,
+                        "forecast_days": forecast_days,
+                    },
+                    timeout=HTTP_TIMEOUT,
+                )
+                resp.raise_for_status()
+                daily = resp.json().get("daily", {})
+                for key, vals in daily.items():
+                    if "member" in key and vals:
+                        val = vals[0]  # first forecast day
+                        if val is not None:
+                            target.append(val)
+                break  # success — no retry needed
+            except (requests.RequestException, KeyError, IndexError) as exc:
+                if attempt == 0:
+                    logger.warning(
+                        "Ensemble fetch failed for %s (attempt 1/2, retrying in 5s): %s",
+                        model, exc,
+                    )
+                    time.sleep(5)
+                else:
+                    logger.warning(
+                        "Ensemble fetch failed for %s (attempt 2/2, giving up): %s",
+                        model, exc,
+                    )
 
     return ifs_members, aifs_members
 
@@ -217,9 +232,9 @@ def train_emos(
     (variance must be positive)
 
     Parameters optimized via L-BFGS-B with bounds.
-    Returns None if too few samples (<7).
+    Returns None if too few samples (<4).
     """
-    if len(samples) < 7:
+    if len(samples) < 4:
         return None
 
     def objective(params: Sequence[float]) -> float:
@@ -232,13 +247,17 @@ def train_emos(
             total_crps += _crps_gaussian(mu, sigma, s.actual_high)
         return total_crps / len(samples)
 
-    # Initial guess: unbiased pass-through
-    x0 = [0.0, 0.7, 0.3, 0.5, 1.0]
+    # Initial guess: unbiased pass-through with moderate variance
+    x0 = [0.0, 0.7, 0.3, 2.25, 1.0]
+    # d lower bound 2.25 = σ floor of 1.5°C (sqrt(2.25))
+    # This prevents overfitting on small samples — the optimizer cannot
+    # collapse variance below what is physically reasonable for daily high
+    # temperature forecasts at 1°C bin resolution.
     bounds = [
         (-10.0, 10.0),   # a: bias can be several degrees
         (0.0, 2.0),      # b: IFS weight
         (0.0, 2.0),      # c: AIFS weight
-        (0.01, 10.0),    # d: minimum variance
+        (2.25, 10.0),    # d: minimum variance (σ >= 1.5°C)
         (0.01, 5.0),     # e: variance scaling
     ]
 
@@ -400,3 +419,208 @@ def load_emos_params(path: Path) -> Optional[EMOSParams]:
         return EMOSParams(**data)
     except (json.JSONDecodeError, TypeError, KeyError):
         return None
+
+
+# ── Hindcast Fetching (for Training) ─────────────────────────────
+
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def fetch_hindcast_ensemble(
+    lat: float, lon: float, past_days: int = 10
+) -> Dict[str, Tuple[List[float], List[float]]]:
+    """Fetch recent hindcast ensemble members from Open-Meteo.
+
+    Returns {date_str: (ifs_members, aifs_members)} for each day with data.
+    The ensemble API accepts past_days to return operational forecast data
+    from recent model runs (not reanalysis).
+    """
+    result: Dict[str, Tuple[List[float], List[float]]] = {}
+
+    for model_name, member_idx in [("ecmwf_ifs025", 0), ("ecmwf_aifs025", 1)]:
+        try:
+            resp = requests.get(
+                ENSEMBLE_API,
+                params={
+                    "latitude": lat,
+                    "longitude": lon,
+                    "daily": "temperature_2m_max",
+                    "models": model_name,
+                    "past_days": past_days,
+                    "forecast_days": 1,
+                },
+                timeout=HTTP_TIMEOUT,
+            )
+            resp.raise_for_status()
+            daily = resp.json().get("daily", {})
+            dates = daily.get("time", [])
+
+            # Collect member values per date
+            member_cols = sorted(
+                k for k in daily.keys() if "member" in k and daily[k]
+            )
+            for i, d in enumerate(dates):
+                members = []
+                for col in member_cols:
+                    vals = daily[col]
+                    if i < len(vals) and vals[i] is not None:
+                        members.append(vals[i])
+                if not members:
+                    continue
+                if d not in result:
+                    result[d] = ([], [])
+                if member_idx == 0:
+                    result[d] = (members, result[d][1])
+                else:
+                    result[d] = (result[d][0], members)
+        except (requests.RequestException, KeyError, IndexError) as exc:
+            logger.warning("Hindcast fetch failed for %s: %s", model_name, exc)
+
+    return result
+
+
+def assemble_training_data(
+    city_slug: str,
+    cfg: CityConfig,
+    emos_dir: Path,
+    forecasts_dir: Path,
+    resolutions_dir: Path,
+) -> List[TrainingSample]:
+    """Assemble (ifs_mean, aifs_mean, ifs_var, actual_high) training pairs.
+
+    Combines three data sources:
+    1. Local saved forecasts + resolutions (highest quality — real-time data)
+    2. Hindcast ensemble members from Open-Meteo past_days API
+    3. Archive actuals from Open-Meteo historical API
+
+    Local data takes priority over hindcast for overlapping dates.
+    """
+    samples_by_date: Dict[str, TrainingSample] = {}
+
+    # Source 1: local forecast + resolution files
+    for res_file in sorted(resolutions_dir.glob("*.json")):
+        day = res_file.stem
+        fc_file = forecasts_dir / f"{day}.json"
+        if not fc_file.exists():
+            continue
+        try:
+            res_data = json.loads(res_file.read_text())
+            fc_data = json.loads(fc_file.read_text())
+            fc_entries = fc_data if isinstance(fc_data, list) else [fc_data]
+        except (json.JSONDecodeError, IOError):
+            continue
+
+        fc_map = {e["city"]: e for e in fc_entries}
+        if city_slug not in fc_map:
+            continue
+
+        # Find actual high from resolution
+        city_res = [r for r in res_data if r.get("city") == city_slug]
+        if not city_res:
+            continue
+        winning_bin = city_res[0].get("winning_bin", "")
+        # Parse temperature from winning bin question
+        import re
+        m = re.search(r"(\d+)\s*°?\s*[Cc]", winning_bin)
+        if not m:
+            continue
+        actual_high = float(m.group(1))
+
+        fc = fc_map[city_slug]
+        samples_by_date[day] = TrainingSample(
+            ifs_mean=fc["ifs_mean"],
+            aifs_mean=fc["aifs_mean"],
+            ifs_var=fc["ifs_var"],
+            actual_high=actual_high,
+        )
+
+    # Source 2+3: hindcast ensemble + archive actuals
+    hindcast = fetch_hindcast_ensemble(cfg.lat, cfg.lon, past_days=10)
+    actuals = fetch_historical_actuals(cfg.lat, cfg.lon, cfg.tz, days=45)
+
+    for day_str, (ifs_members, aifs_members) in hindcast.items():
+        if day_str in samples_by_date:
+            continue  # local data takes priority
+        if day_str not in actuals:
+            continue  # no observed actual for this day
+        if len(ifs_members) < 3:
+            continue
+
+        ifs_mean = statistics.mean(ifs_members)
+        ifs_var = statistics.variance(ifs_members) if len(ifs_members) > 1 else 1.0
+        aifs_mean = statistics.mean(aifs_members) if aifs_members else ifs_mean
+
+        samples_by_date[day_str] = TrainingSample(
+            ifs_mean=ifs_mean,
+            aifs_mean=aifs_mean,
+            ifs_var=ifs_var,
+            actual_high=actuals[day_str],
+        )
+
+    return list(samples_by_date.values())
+
+
+def train_all_cities(
+    emos_dir: Path,
+    forecasts_dir: Path,
+    resolutions_dir: Path,
+) -> Dict[str, Optional[EMOSParams]]:
+    """Train EMOS parameters for all 8 cities.
+
+    For each city: assemble training data, train EMOS, validate that fitted σ
+    is wider than naive σ, save params if valid.
+
+    Returns {city_slug: params_or_None}.
+    """
+    results: Dict[str, Optional[EMOSParams]] = {}
+
+    for city_slug, cfg in CITIES.items():
+        samples = assemble_training_data(
+            city_slug, cfg, emos_dir, forecasts_dir, resolutions_dir
+        )
+        logger.info(
+            "Training %s: %d samples assembled", city_slug, len(samples)
+        )
+
+        if len(samples) < 4:
+            logger.warning(
+                "Skipping %s: only %d samples (need >=4)", city_slug, len(samples)
+            )
+            results[city_slug] = None
+            continue
+
+        params = train_emos(samples, station=city_slug)
+        if params is None:
+            logger.warning("Skipping %s: optimizer did not converge", city_slug)
+            results[city_slug] = None
+            continue
+
+        # Validation gate: fitted σ must be wider than naive σ
+        # naive σ = sqrt(median_ifs_var) * 1.3, matching compute_naive_gaussian()
+        median_ifs_var = statistics.median(s.ifs_var for s in samples)
+        fitted_var = max(params.d + params.e * median_ifs_var, 0.01)
+        fitted_sigma = math.sqrt(fitted_var)
+
+        naive_sigma = max(math.sqrt(median_ifs_var) * 1.3, 1.0)
+
+        if fitted_sigma < naive_sigma:
+            logger.warning(
+                "Skipping %s: fitted σ=%.2f < naive σ=%.2f (overfit suspected)",
+                city_slug, fitted_sigma, naive_sigma,
+            )
+            results[city_slug] = None
+            continue
+
+        # Save
+        param_path = emos_dir / f"{city_slug}.json"
+        save_emos_params(params, param_path)
+        logger.info(
+            "Trained %s: %d samples, σ=%.2f (naive=%.2f), params=%s",
+            city_slug, len(samples), fitted_sigma, naive_sigma,
+            f"a={params.a:.3f} b={params.b:.3f} c={params.c:.3f} d={params.d:.3f} e={params.e:.3f}",
+        )
+        results[city_slug] = params
+
+    return results

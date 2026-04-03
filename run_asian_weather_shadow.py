@@ -47,6 +47,7 @@ from src.calibration.emos import (
     load_emos_params,
     parse_bin_edges_from_questions,
     save_emos_params,
+    train_all_cities,
     train_emos,
     TrainingSample,
 )
@@ -371,6 +372,31 @@ def save_forecast(record: Dict[str, Any], target_date: date) -> None:
     path.write_text(json.dumps(existing, indent=2))
 
 
+def _load_last_known_forecast(city_slug: str) -> tuple:
+    """Load the most recent forecast for a city from prior days' files.
+
+    Returns (ifs_mean, aifs_mean, ifs_var) or (None, None, None) if not found.
+    Searches the last 7 days of forecast files.
+    """
+    forecasts_dir = DATA_DIR / "forecasts"
+    today = date.today()
+    for days_back in range(1, 8):
+        d = today - timedelta(days=days_back)
+        fp = forecasts_dir / f"{d.isoformat()}.json"
+        if not fp.exists():
+            continue
+        try:
+            data = json.loads(fp.read_text())
+            entries = data if isinstance(data, list) else [data]
+            city_entries = [e for e in entries if e.get("city") == city_slug]
+            if city_entries:
+                fc = city_entries[-1]
+                return fc["ifs_mean"], fc["aifs_mean"], fc["ifs_var"]
+        except (json.JSONDecodeError, KeyError):
+            continue
+    return None, None, None
+
+
 # ── Phase 5: Resolution and Metrics ────────────────────────────────
 
 def check_resolved_markets(target_date: date) -> List[Dict[str, Any]]:
@@ -657,8 +683,17 @@ def process_city(
                 mean, std = compute_naive_gaussian(ifs_members, aifs_members)
                 variance = std * std
         else:
-            logger.warning(f"{city_slug}: no ensemble data, using wide default")
-            mean, variance = 15.0, 9.0
+            # Try last-known forecast from previous days
+            ifs_mean, aifs_mean, ifs_var = _load_last_known_forecast(city_slug)
+            if ifs_mean is not None:
+                logger.warning(f"{city_slug}: no ensemble data, using last-known forecast")
+                if emos_params:
+                    mean, variance = emos_predict(emos_params, ifs_mean, aifs_mean, ifs_var)
+                else:
+                    mean, variance = ifs_mean, max(ifs_var * 1.3, 2.25)
+            else:
+                logger.warning(f"{city_slug}: no ensemble data and no prior forecast, using 15°C default")
+                mean, variance = 15.0, 9.0
     else:
         # Load today's forecast from file
         forecasts = []
@@ -681,7 +716,16 @@ def process_city(
                 mean, std = compute_naive_gaussian(fc["ifs_members"], fc.get("aifs_members", []))
                 variance = std * std
         else:
-            mean, variance = 15.0, 9.0
+            # Try last-known forecast from previous days
+            ifs_mean, aifs_mean, ifs_var = _load_last_known_forecast(city_slug)
+            if ifs_mean is not None:
+                logger.warning(f"{city_slug}: no today forecast, using last-known")
+                if emos_params:
+                    mean, variance = emos_predict(emos_params, ifs_mean, aifs_mean, ifs_var)
+                else:
+                    mean, variance = ifs_mean, max(ifs_var * 1.3, 2.25)
+            else:
+                mean, variance = 15.0, 9.0
 
     # Bayesian update with METAR
     if metar_temp is not None:
@@ -817,6 +861,47 @@ def run_once(target_date: Optional[date] = None, city_filter: Optional[str] = No
             process_city(city_slug, cfg, target_date, metar_data, taf_data, is_first_run, ts)
         except Exception as e:
             logger.error(f"{city_slug}: error — {e}")
+
+    # Auto-retrain EMOS if params are missing (any run) or stale (first run, Sunday)
+    _maybe_retrain_emos(check_staleness=is_first_run)
+
+
+def _maybe_retrain_emos(check_staleness: bool = False) -> None:
+    """Retrain EMOS params if any city is missing params, or weekly on Sunday.
+
+    Missing params trigger retrain on every invocation.
+    Staleness check (weekly Sunday) only runs when check_staleness=True (first run of day).
+    """
+    any_missing = any(
+        not (EMOS_DIR / f"{city}.json").exists() for city in CITIES
+    )
+
+    stale = False
+    if check_staleness:
+        is_sunday = date.today().weekday() == 6
+        oldest_param = None
+        for city in CITIES:
+            p = EMOS_DIR / f"{city}.json"
+            if p.exists():
+                age_days = (date.today() - date.fromtimestamp(p.stat().st_mtime)).days
+                if oldest_param is None or age_days > oldest_param:
+                    oldest_param = age_days
+        stale = is_sunday and (oldest_param is None or oldest_param >= 7)
+
+    should_retrain = any_missing or stale
+
+    if not should_retrain:
+        return
+
+    reason = "missing params" if any_missing else "weekly retrain"
+    logger.info(f"Auto-retrain triggered: {reason}")
+
+    try:
+        results = train_all_cities(EMOS_DIR, DATA_DIR / "forecasts", DATA_DIR / "resolutions")
+        trained = sum(1 for v in results.values() if v is not None)
+        logger.info(f"Auto-retrain complete: {trained}/{len(results)} cities trained")
+    except Exception as e:
+        logger.error(f"Auto-retrain failed (non-fatal): {e}")
 
 
 def resolve(target_date: Optional[date] = None) -> None:
@@ -1035,9 +1120,26 @@ def main() -> None:
     parser.add_argument("--status", action="store_true", help="Print formatted status dashboard")
     parser.add_argument("--city", type=str, help="Filter to single city")
     parser.add_argument("--date", type=str, help="Target date (YYYY-MM-DD)")
+    parser.add_argument("--train", action="store_true", help="Train EMOS params for all cities")
     args = parser.parse_args()
 
     target_date = date.fromisoformat(args.date) if args.date else None
+
+    if args.train:
+        _ensure_dirs()
+        forecasts_dir = DATA_DIR / "forecasts"
+        resolutions_dir = DATA_DIR / "resolutions"
+        logger.info("Training EMOS params for all cities...")
+        results = train_all_cities(EMOS_DIR, forecasts_dir, resolutions_dir)
+        trained = sum(1 for v in results.values() if v is not None)
+        skipped = sum(1 for v in results.values() if v is None)
+        print(f"\nEMOS Training Complete: {trained} trained, {skipped} skipped")
+        for city, params in sorted(results.items()):
+            if params:
+                print(f"  {city}: a={params.a:.3f} b={params.b:.3f} c={params.c:.3f} d={params.d:.3f} e={params.e:.3f} (n={params.trained_on})")
+            else:
+                print(f"  {city}: SKIPPED (insufficient data or validation failed)")
+        return
 
     if args.status:
         print_status()
