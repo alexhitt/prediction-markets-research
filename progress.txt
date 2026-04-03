@@ -1,7 +1,10 @@
-Last session: 2026-03-30
+Last session: 2026-04-03
 Status: active
-Built: Asian weather shadow tracker (run_asian_weather_shadow.py + src/calibration/emos.py), --status CLI dashboard, DESIGN.md, launchd plist
-In progress: Data collection (Day 1 of 14), EMOS cold start (naive Gaussian phase)
+Built: Bundle A — EMOS calibration pipeline, fetch resilience, auto-retrain trigger (commit d2d40aa). 8/8 cities trained. Seoul bin probs improved 12%→24% on correct bin. Shanghai 0%→26%.
+In progress: Data collection continues (Day 4+). EMOS now calibrated with σ=1.5°C floor. Probabilities are trustworthy. Kill/promote gate can produce real metrics.
 Blocked: nothing
-Next: Activate launchd plist, monitor --status daily, Day 7 checkpoint for Delta_T + accuracy, EMOS training at Day 15
-Phase: Shadow mode validation — kill/promote decision at Day 14
+Next: Bundle B — disable/demote yes-picking, add Kelly position sizing to NO-harvesting, implement Delta_T computation. Wait 7 days for calibrated data before evaluating.
+Phase: Shadow mode validation — calibrated probabilities as of 2026-04-03, kill/promote decision at Day 14+
+Plan: plan-2026-04-03.md
+Completed: Phase 1 (EMOS training), Phase 2 (fetch resilience), Phase 3 (auto-retrain)
+Next step: Monitor 7 days of calibrated shadow data, then implement Bundle B
