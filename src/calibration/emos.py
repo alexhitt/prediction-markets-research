@@ -237,6 +237,11 @@ def train_emos(
     if len(samples) < 4:
         return None
 
+    # Regularization strength scales inversely with sample count.
+    # With 4 samples, λ=0.5 keeps params near pass-through.
+    # With 30+ samples, λ→0.07 and data dominates.
+    reg_lambda = 2.0 / len(samples)
+
     def objective(params: Sequence[float]) -> float:
         a, b, c, d, e = params
         total_crps = 0.0
@@ -245,7 +250,12 @@ def train_emos(
             var = max(d + e * s.ifs_var, 0.01)
             sigma = math.sqrt(var)
             total_crps += _crps_gaussian(mu, sigma, s.actual_high)
-        return total_crps / len(samples)
+        crps = total_crps / len(samples)
+
+        # Regularize toward pass-through: a≈0, b+c≈1, e≈1
+        # Prevents degenerate fits where large |a| compensates for b+c >> 1
+        reg = reg_lambda * (a * a + (b + c - 1.0) ** 2 + (e - 1.0) ** 2)
+        return crps + reg
 
     # Initial guess: unbiased pass-through with moderate variance
     x0 = [0.0, 0.7, 0.3, 2.25, 1.0]
