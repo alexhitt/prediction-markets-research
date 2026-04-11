@@ -186,6 +186,21 @@ def fetch_taf_tx(icao_ids: Sequence[str]) -> Dict[str, Optional[int]]:
     return result
 
 
+# ── Timestamp Helpers ──────────────────────────────────────────────
+
+def _parse_timestamp(ts_str: str) -> Optional[datetime]:
+    """Parse a timestamp string — ISO 8601 or Unix epoch seconds."""
+    if not ts_str or ts_str == "None" or ts_str == "null":
+        return None
+    try:
+        stripped = ts_str.strip()
+        if stripped.lstrip("-").isdigit():
+            return datetime.fromtimestamp(int(stripped), tz=timezone.utc)
+        return datetime.fromisoformat(stripped.replace("Z", "+00:00"))
+    except (ValueError, OSError, OverflowError):
+        return None
+
+
 # ── Phase 3: Shadow Trade Logic ─────────────────────────────────────
 
 def evaluate_yes_picking(
@@ -260,10 +275,27 @@ def detect_bin_deaths(
     metar_temp: Optional[int],
     metar_ts: Optional[str],
     ts: str,
+    *,
+    city: Optional[str] = None,
+    target_date: Optional[date] = None,
 ) -> List[Dict[str, Any]]:
-    """Detect bins that transitioned from open (>$0.001) to closed ($0.00)."""
+    """Detect bins that transitioned from open (>$0.001) to closed ($0.00).
+
+    Computes two lag metrics:
+    - delta_t_seconds: poll time minus METAR observation time (METAR staleness)
+    - peak_to_resolution_seconds: poll time minus first observation of the day's
+      peak temperature (the real confirmation edge window)
+    """
     prev_map = {b["question"]: b for b in previous_bins}
     triggers: List[Dict[str, Any]] = []
+    poll_dt = _parse_timestamp(ts)
+
+    # Peak-to-resolution lag (same for all bins in this city/date)
+    peak_lag = None
+    if city and target_date and poll_dt:
+        peak_time = _find_peak_time(city, target_date)
+        if peak_time and peak_time < poll_dt:
+            peak_lag = int((poll_dt - peak_time).total_seconds())
 
     for curr in current_bins:
         q = curr["question"]
@@ -271,18 +303,20 @@ def detect_bin_deaths(
         if prev is None:
             continue
         if curr["closed"] and not prev["closed"] and prev["yes_price"] > 0.001:
-            delta_t = None
-            if metar_ts and ts:
-                # Simple delta_t in seconds between METAR obs and bin closure detection
-                # (approximate — actual closure may have happened between polls)
-                delta_t = 0  # placeholder — will be computed from timestamps
+            metar_lag = None
+            if metar_ts and poll_dt:
+                metar_dt = _parse_timestamp(str(metar_ts))
+                if metar_dt and metar_dt < poll_dt:
+                    metar_lag = int((poll_dt - metar_dt).total_seconds())
+
             triggers.append({
                 "ts": ts,
                 "bin_closed": q,
                 "previous_price": prev["yes_price"],
                 "metar_temp_at_close": metar_temp,
                 "metar_ts": metar_ts,
-                "delta_t_seconds": delta_t,
+                "delta_t_seconds": metar_lag,
+                "peak_to_resolution_seconds": peak_lag,
             })
 
     return triggers
@@ -335,6 +369,39 @@ def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
             except json.JSONDecodeError:
                 continue
     return records
+
+
+def _find_peak_time(city: str, target_date: date) -> Optional[datetime]:
+    """Find when max_observed_temp_c first reached its final value for a city/date.
+
+    Returns the timestamp of the first snapshot where max_observed_temp_c
+    equals the day's final observed maximum, or None if insufficient data.
+    """
+    snap_path = DATA_DIR / "snapshots" / f"{target_date.isoformat()}.jsonl"
+    if not snap_path.exists():
+        return None
+
+    records = _read_jsonl(snap_path)
+    city_snaps = [r for r in records if r.get("city") == city]
+    if not city_snaps:
+        return None
+
+    # Find the final max_observed_temp_c (last non-None value)
+    final_max = None
+    for snap in reversed(city_snaps):
+        if snap.get("max_observed_temp_c") is not None:
+            final_max = snap["max_observed_temp_c"]
+            break
+
+    if final_max is None:
+        return None
+
+    # Find the first snapshot where max_observed_temp_c reached final_max
+    for snap in city_snaps:
+        if snap.get("max_observed_temp_c") == final_max:
+            return _parse_timestamp(snap.get("ts", ""))
+
+    return None
 
 
 def load_previous_snapshot(city: str, target_date: date) -> Optional[Dict[str, Any]]:
@@ -512,6 +579,7 @@ def update_metrics() -> Dict[str, Any]:
             continue
 
         days_observed += 1
+
         for city_res in data:
             city = city_res.get("city", "")
             trades = city_res.get("total_trades", 0)
@@ -532,14 +600,31 @@ def update_metrics() -> Dict[str, Any]:
             by_region[region]["hits"] += hits
             by_region[region]["pnl"] += pnl
 
-    # Load Delta_T from oracle triggers
+    # Compute confirmation lags: peak temperature observation → oracle resolution
+    # Uses snapshot data directly so historical days are included (backfill).
     triggers_dir = DATA_DIR / "oracle_triggers"
     if triggers_dir.exists():
-        for f in triggers_dir.glob("*.jsonl"):
-            for record in _read_jsonl(f):
-                dt = record.get("delta_t_seconds")
-                if dt is not None and dt > 0:
-                    delta_ts.append(dt / 60.0)  # convert to minutes
+        for trig_file in sorted(triggers_dir.glob("*.jsonl")):
+            trig_date = date.fromisoformat(trig_file.stem)
+            records = _read_jsonl(trig_file)
+            # Group by city to compute one lag per city/date
+            cities_seen: Dict[str, datetime] = {}
+            for record in records:
+                city = record.get("city", "")
+                if not city or city in cities_seen:
+                    continue
+                resolution_dt = _parse_timestamp(record.get("ts", ""))
+                if not resolution_dt:
+                    continue
+                cities_seen[city] = resolution_dt
+
+            for city, resolution_dt in cities_seen.items():
+                peak_time = _find_peak_time(city, trig_date)
+                if peak_time is None or peak_time >= resolution_dt:
+                    continue  # no snapshot data or peak after resolution (gap)
+                lag_min = (resolution_dt - peak_time).total_seconds() / 60.0
+                if lag_min > 0:
+                    delta_ts.append(lag_min)
 
     accuracy = total_hits / total_trades if total_trades > 0 else 0.0
     avg_pnl = total_pnl / total_trades if total_trades > 0 else 0.0
@@ -590,7 +675,8 @@ def update_readiness(metrics: Dict[str, Any]) -> Dict[str, Any]:
             accuracy > 0.25
             and avg_pnl > 1.50
             and trades >= 100
-            and (delta_t is None or delta_t > 30)
+            and delta_t is not None
+            and delta_t > 30
         ):
             status = "promote"
             decision_status = "promote"
@@ -813,7 +899,7 @@ def process_city(
 
     # Detect bin deaths
     if prev_bins:
-        deaths = detect_bin_deaths(bins, prev_bins, metar_temp, str(metar_obs_time), ts)
+        deaths = detect_bin_deaths(bins, prev_bins, metar_temp, str(metar_obs_time), ts, city=city_slug, target_date=target_date)
         for death in deaths:
             death["city"] = city_slug
             death["target_date"] = target_date.isoformat()
